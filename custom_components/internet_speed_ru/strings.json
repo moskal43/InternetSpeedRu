@@ -17,8 +17,12 @@
       }
     },
     "sensor": {
-      "download": {"name": "Download"},
-      "latency": {"name": "Latency"},
+      "download": {
+        "name": "Download"
+      },
+      "latency": {
+        "name": "Latency"
+      },
       "status": {
         "name": "Last measurement status",
         "state": {
@@ -27,12 +31,18 @@
           "success": "Success"
         }
       },
-      "upload": {"name": "Upload"}
+      "upload": {
+        "name": "Upload"
+      }
     }
   },
   "exceptions": {
-    "busy": {"message": "A measurement is already running."},
-    "measurement_failed": {"message": "The measurement failed ({reason})."}
+    "busy": {
+      "message": "A measurement is already running."
+    },
+    "measurement_failed": {
+      "message": "The measurement failed ({reason})."
+    }
   },
   "title": "InternetSpeedRu"
 }

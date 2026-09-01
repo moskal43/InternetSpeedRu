@@ -8,7 +8,7 @@
   "integration_type": "service",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/moskal43/InternetSpeedRu/issues",
-  "requirements": [],
+  "requirements": ["iperf3==0.1.11"],
   "single_config_entry": true,
   "version": "0.1.0"
 }

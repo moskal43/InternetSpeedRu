@@ -10,5 +10,29 @@
       }
     }
   },
+  "entity": {
+    "button": {
+      "run_measurement": {
+        "name": "Запустить замер"
+      }
+    },
+    "sensor": {
+      "download": {"name": "Download"},
+      "latency": {"name": "Latency"},
+      "status": {
+        "name": "Статус последнего замера",
+        "state": {
+          "error": "Ошибка",
+          "running": "Выполняется",
+          "success": "Успешно"
+        }
+      },
+      "upload": {"name": "Upload"}
+    }
+  },
+  "exceptions": {
+    "busy": {"message": "Замер уже выполняется."},
+    "measurement_failed": {"message": "Не удалось выполнить замер ({reason})."}
+  },
   "title": "InternetSpeedRu"
 }

@@ -22,7 +22,7 @@ async def test_home_assistant_manifest_contract(hass) -> None:
         "iot_class": "local_polling",
         "issue_tracker": "https://github.com/moskal43/InternetSpeedRu/issues",
         "name": "InternetSpeedRu",
-        "requirements": [],
+        "requirements": ["iperf3==0.1.11"],
         "single_config_entry": True,
         "version": "0.1.0",
     }
