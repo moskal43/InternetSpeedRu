@@ -1,0 +1,14 @@
+{
+  "config": {
+    "abort": {
+      "single_instance_allowed": "Only one InternetSpeedRu instance can be configured."
+    },
+    "step": {
+      "user": {
+        "description": "InternetSpeedRu runs active tests through a public Iperf3 server. Each measurement can saturate download and upload for about 10 seconds per direction. Automatic measurements default to once every 24 hours and can be changed or disabled later.",
+        "title": "Set up InternetSpeedRu"
+      }
+    }
+  },
+  "title": "InternetSpeedRu"
+}
