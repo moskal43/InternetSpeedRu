@@ -1,0 +1,14 @@
+{
+  "domain": "internet_speed_ru",
+  "name": "InternetSpeedRu",
+  "codeowners": ["@moskal43"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/moskal43/InternetSpeedRu",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/moskal43/InternetSpeedRu/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}
