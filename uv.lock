@@ -1226,6 +1226,9 @@ wheels = [
 name = "internetspeedru"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "iperf3" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1236,6 +1239,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "iperf3", specifier = "==0.1.11" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1244,6 +1248,12 @@ dev = [
     { name = "pytest-homeassistant-custom-component" },
     { name = "ruff" },
 ]
+
+[[package]]
+name = "iperf3"
+version = "0.1.11"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d5/c1/ca9dee2fdd3bf403e90f949da4978ae9ba5330476f867ee8fb28f8c1c26e/iperf3-0.1.11.tar.gz", hash = "sha256:d50eebbf2dcf445a173f98a82f9c433e0302d3dfb7987e1f21b86b35ef63ce26", size = 14286, upload-time = "2019-04-13T07:54:02.119Z" }
 
 [[package]]
 name = "jinja2"

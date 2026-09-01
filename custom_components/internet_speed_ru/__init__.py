@@ -4,7 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN, NAME
+from .const import DOMAIN, NAME, PLATFORMS
 from .runtime import InternetSpeedRuRuntime
 
 type InternetSpeedRuConfigEntry = ConfigEntry[InternetSpeedRuRuntime]
@@ -28,6 +28,8 @@ async def async_setup_entry(
         name=NAME,
     )
 
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     return True
 
 
@@ -36,4 +38,5 @@ async def async_unload_entry(
     entry: InternetSpeedRuConfigEntry,
 ) -> bool:
     """Unload InternetSpeedRu."""
-    return True
+    entry.runtime_data.async_cancel()
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
