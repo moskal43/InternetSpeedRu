@@ -9,7 +9,7 @@ from homeassistant.core import HassJob, HomeAssistant
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.util import dt as dt_util
 
-from .const import SCHEDULE_DURATIONS
+from .const import SCHEDULE_DURATIONS, ScheduleInterval
 from .runtime import MeasurementError
 
 if TYPE_CHECKING:
@@ -80,14 +80,14 @@ class MeasurementSchedule:
     ) -> None:
         self._runtime = runtime
         self._clock = clock
-        self._interval = interval
+        self._interval = ScheduleInterval(interval)
         self._cancel_timer: Callable[[], None] | None = None
         self._cancelled = False
 
     @property
     def interval(self) -> str:
         """Return the configured schedule preset."""
-        return self._interval
+        return self._interval.value
 
     def start(self) -> None:
         """Arm the initial or restored schedule."""
@@ -95,9 +95,7 @@ class MeasurementSchedule:
 
     def update_interval(self, interval: str) -> None:
         """Apply a preset immediately against the persisted baseline."""
-        if interval != "off" and interval not in SCHEDULE_DURATIONS:
-            raise ValueError(f"Unsupported schedule interval: {interval}")
-        self._interval = interval
+        self._interval = ScheduleInterval(interval)
         self.recalculate()
 
     def recalculate(self) -> None:
@@ -105,9 +103,11 @@ class MeasurementSchedule:
         if self._cancel_timer is not None:
             self._cancel_timer()
             self._cancel_timer = None
-        if self._cancelled or self._interval == "off":
+        if self._cancelled:
             return
         duration = SCHEDULE_DURATIONS[self._interval]
+        if duration is None:
+            return
         baseline = self._runtime.schedule_baseline
         due = self._clock.now() if baseline is None else baseline + duration
         if due < self._clock.now():
@@ -117,12 +117,12 @@ class MeasurementSchedule:
     async def _async_due(self) -> None:
         self._cancel_timer = None
         attempt_time = self._clock.now()
-        await self._runtime.async_set_schedule_baseline(attempt_time)
         if self._runtime.running:
+            await self._runtime.async_set_schedule_baseline(attempt_time)
             self.recalculate()
             return
         try:
-            await self._runtime.async_measure()
+            await self._runtime.async_measure(schedule_baseline=attempt_time)
         except MeasurementError:
             pass
         finally:

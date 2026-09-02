@@ -13,6 +13,7 @@ from custom_components.internet_speed_ru.const import (
     CONF_INTERVAL,
     DATA_RUNNER,
     DATA_SCHEDULER_FACTORY,
+    DATA_STATE_STORE_FACTORY,
     DOMAIN,
     SCHEDULE_INTERVALS,
 )
@@ -331,3 +332,49 @@ async def test_scheduled_overlap_is_skipped_without_queueing(
     assert entry.runtime_data.last_success == completed_at
     await fake_clock.async_advance(timedelta(seconds=1))
     assert entry.runtime_data.last_success == fake_clock.now()
+
+
+async def test_scheduled_run_claims_the_slot_before_persistence(
+    hass, fake_clock: FakeClock
+) -> None:
+    """A manual request cannot slip in while a due attempt is being persisted."""
+
+    class GateStore:
+        def __init__(self) -> None:
+            self.state = None
+            self.block_next = False
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def async_load(self):
+            return self.state
+
+        async def async_save(self, state) -> None:
+            if self.block_next:
+                self.block_next = False
+                self.entered.set()
+                await self.release.wait()
+            self.state = state
+
+    store = GateStore()
+    hass.data[DOMAIN][DATA_STATE_STORE_FACTORY] = lambda hass, entry_id: store
+    entry = await async_configure_kirov_entry(hass)
+    await fake_clock.async_advance(timedelta(0))
+    await _set_interval(hass, entry, "30m")
+
+    store.block_next = True
+    scheduled = asyncio.create_task(fake_clock.async_advance(timedelta(minutes=30)))
+    await store.entered.wait()
+    assert entry.runtime_data.running
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "button",
+            "press",
+            {"entity_id": "button.internetspeedru_run_measurement"},
+            blocking=True,
+        )
+
+    store.release.set()
+    await scheduled
+    assert entry.runtime_data.status.value == "success"

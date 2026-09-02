@@ -22,6 +22,7 @@ from .const import (
     DOMAIN,
     NAME,
     SCHEDULE_INTERVALS,
+    effective_interval,
 )
 
 type _Flow = config_entries.ConfigFlow | config_entries.OptionsFlow
@@ -180,10 +181,7 @@ class InternetSpeedRuOptionsFlow(_ManualServerCascade, config_entries.OptionsFlo
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         """Change the automatic measurement interval."""
-        current = self.config_entry.options.get(
-            CONF_INTERVAL,
-            self.config_entry.data.get(CONF_INTERVAL, DEFAULT_INTERVAL),
-        )
+        current = effective_interval(self.config_entry)
         if user_input is not None:
             options = dict(self.config_entry.options)
             options[CONF_INTERVAL] = user_input[CONF_INTERVAL]

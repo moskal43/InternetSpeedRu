@@ -10,16 +10,16 @@ from .catalog import FALLBACK_CATALOG
 from .catalog_runtime import CatalogUnavailableError, catalog_provider
 from .const import (
     CATALOG_REFRESH_INTERVAL,
-    CONF_INTERVAL,
     CONF_SERVER,
     DATA_NOW,
     DATA_PROBE,
     DATA_RUNNER,
     DATA_SCHEDULER_FACTORY,
-    DEFAULT_INTERVAL,
+    DATA_STATE_STORE_FACTORY,
     DOMAIN,
     NAME,
     PLATFORMS,
+    effective_interval,
 )
 from .runtime import InternetSpeedRuRuntime, MeasurementError
 from .scheduling import HomeAssistantClockScheduler
@@ -44,9 +44,7 @@ async def _async_options_updated(
 ) -> None:
     """Apply a manual server change and trigger work only when idle."""
     hostname = entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
-    interval = entry.options.get(
-        CONF_INTERVAL, entry.data.get(CONF_INTERVAL, DEFAULT_INTERVAL)
-    )
+    interval = effective_interval(entry)
     runtime = entry.runtime_data
     changed = hostname != runtime.server
     runtime.update_interval(interval)
@@ -71,7 +69,11 @@ async def async_setup_entry(
     """Set up InternetSpeedRu from a config entry."""
     hostname = entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
     provider = catalog_provider(hass)
-    state_store = HomeAssistantRuntimeStateStore(hass, entry.entry_id)
+    dependencies = hass.data.get(DOMAIN, {})
+    state_store_factory = dependencies.get(
+        DATA_STATE_STORE_FACTORY, HomeAssistantRuntimeStateStore
+    )
+    state_store = state_store_factory(hass, entry.entry_id)
     selected_server = None
     try:
         selection = await provider.async_catalog()
@@ -86,7 +88,6 @@ async def async_setup_entry(
                 raise ConfigEntryNotReady(
                     "Selected server is unavailable in every validated catalog"
                 ) from err
-    dependencies = hass.data.get(DOMAIN, {})
     runtime_args = {}
     if DATA_PROBE in dependencies:
         runtime_args["probe"] = dependencies[DATA_PROBE]
@@ -131,10 +132,7 @@ async def async_setup_entry(
 
     entry.runtime_data.start_schedule(
         scheduler,
-        entry.options.get(
-            CONF_INTERVAL,
-            entry.data.get(CONF_INTERVAL, DEFAULT_INTERVAL),
-        ),
+        effective_interval(entry),
     )
 
     return True
