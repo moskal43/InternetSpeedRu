@@ -1,5 +1,9 @@
 # InternetSpeedRu
 
+<p align="center">
+  <img src="assets/internetspeedru-logo.png" alt="Логотип InternetSpeedRu" width="280">
+</p>
+
 InternetSpeedRu — пользовательская интеграция Home Assistant для атомарных
 замеров download, upload и latency через публичные Iperf3-серверы в России.
 Она настраивается из интерфейса, сама выбирает доступный сервер или закрепляет
@@ -18,6 +22,11 @@ Home Assistant Container, Supervised и Core Python installation допуска�
 `v0.1.0`. Версии Home Assistant Core ниже 2026.8 не поддерживаются.
 
 ## Установка через HACS custom repository
+
+[![Открыть репозиторий InternetSpeedRu в HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=moskal43&repository=InternetSpeedRu&category=integration)
+
+Нажмите кнопку выше, чтобы открыть репозиторий InternetSpeedRu в HACS, или
+добавьте его вручную:
 
 1. Откройте HACS.
 2. Откройте меню в правом верхнем углу и выберите **Custom repositories**.
