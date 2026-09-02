@@ -146,5 +146,5 @@ async def test_invalid_stored_state_does_not_block_config_entry(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert entry.runtime_data.measurement is None
-    assert entry.runtime_data.status is None
+    assert entry.runtime_data.measurement is not None
+    assert entry.runtime_data.status.value == "success"

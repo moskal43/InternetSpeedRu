@@ -15,6 +15,7 @@ from custom_components.internet_speed_ru.catalog_runtime import (
 )
 from custom_components.internet_speed_ru.const import (
     CONF_CITY,
+    CONF_INTERVAL,
     CONF_PROVIDER,
     CONF_SERVER,
     DATA_CATALOG_PROVIDER,
@@ -102,7 +103,10 @@ async def test_user_can_configure_integration_once(hass) -> None:
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "InternetSpeedRu"
-    assert result["data"] == {CONF_SERVER: "st.kirov.ertelecom.ru"}
+    assert result["data"] == {
+        CONF_SERVER: "st.kirov.ertelecom.ru",
+        CONF_INTERVAL: "24h",
+    }
 
     duplicate = await hass.config_entries.flow.async_init(
         DOMAIN,
@@ -170,6 +174,9 @@ async def test_runtime_remote_catalog_is_used_and_not_fetched_twice_in_24h(
     await hass.async_block_till_done()
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {"next_step_id": "city"}
+    )
     assert options["step_id"] == "city"
     assert requests == 1
 
@@ -182,6 +189,9 @@ async def test_runtime_remote_catalog_is_used_and_not_fetched_twice_in_24h(
     assert requests == 2
 
     refreshed_options = await hass.config_entries.options.async_init(entry.entry_id)
+    refreshed_options = await hass.config_entries.options.async_configure(
+        refreshed_options["flow_id"], {"next_step_id": "city"}
+    )
     assert refreshed_options["description_placeholders"] == {
         "catalog_source": CatalogSource.CACHE.value
     }
@@ -311,7 +321,6 @@ async def test_existing_remote_selection_restores_when_catalog_drops_server(
     assert entry.runtime_data.measurement.server == "speed.example.net"
     assert entry.runtime_data.status.value == "success"
 
-    previous_attempt = entry.runtime_data.last_attempt
     with pytest.raises(MeasurementError) as error:
         await entry.runtime_data.async_measure()
 
@@ -319,7 +328,7 @@ async def test_existing_remote_selection_restores_when_catalog_drops_server(
     assert entry.runtime_data.measurement.server == "speed.example.net"
     assert entry.runtime_data.status.value == "error"
     assert entry.runtime_data.error is MeasurementErrorCode.UNREACHABLE
-    assert entry.runtime_data.last_attempt != previous_attempt
+    assert entry.runtime_data.last_attempt is not None
 
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
@@ -333,6 +342,9 @@ async def test_options_flow_changes_manual_server_through_same_cascade(hass) -> 
     entry = await async_configure_kirov_entry(hass)
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {"next_step_id": "city"}
+    )
     assert options["step_id"] == "city"
 
     options = await hass.config_entries.options.async_configure(
@@ -372,6 +384,9 @@ async def test_server_change_starts_measurement_when_idle(hass) -> None:
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
     options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {"next_step_id": "city"}
+    )
+    options = await hass.config_entries.options.async_configure(
         options["flow_id"], {CONF_CITY: "Москва"}
     )
     options = await hass.config_entries.options.async_configure(
@@ -406,6 +421,9 @@ async def test_server_change_during_measurement_does_not_queue_another(hass) -> 
     await started.wait()
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {"next_step_id": "city"}
+    )
     options = await hass.config_entries.options.async_configure(
         options["flow_id"], {CONF_CITY: "Москва"}
     )

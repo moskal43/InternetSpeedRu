@@ -6,7 +6,14 @@ from pathlib import Path
 import pytest
 
 from custom_components.internet_speed_ru.catalog_runtime import CatalogProvider
-from custom_components.internet_speed_ru.const import DATA_CATALOG_PROVIDER, DOMAIN
+from custom_components.internet_speed_ru.const import (
+    DATA_CATALOG_PROVIDER,
+    DATA_NOW,
+    DATA_PROBE,
+    DATA_RUNNER,
+    DATA_SCHEDULER_FACTORY,
+    DOMAIN,
+)
 
 pytest_plugins = ["pytest_homeassistant_custom_component"]
 
@@ -47,3 +54,27 @@ def fake_runtime_catalog(hass) -> None:
         EmptyStore(),
         now=lambda: datetime(2026, 9, 2, tzinfo=UTC),
     )
+
+    async def probe(server: str, port: int) -> float:
+        return 12.0
+
+    hass.data[DOMAIN][DATA_PROBE] = probe
+    hass.data[DOMAIN][DATA_RUNNER] = lambda server, port, reverse: (
+        75.0 if reverse else 25.0
+    )
+
+    class ImmediateOnlyScheduler:
+        """Run initial work while leaving future timers inert in unrelated tests."""
+
+        def now(self):
+            return datetime(2026, 9, 2, tzinfo=UTC)
+
+        def async_call_at(self, callback, when):
+            if when <= self.now():
+                task = hass.async_create_task(callback())
+                return task.cancel
+            return lambda: None
+
+    scheduler = ImmediateOnlyScheduler()
+    hass.data[DOMAIN][DATA_NOW] = scheduler.now
+    hass.data[DOMAIN][DATA_SCHEDULER_FACTORY] = lambda hass: scheduler

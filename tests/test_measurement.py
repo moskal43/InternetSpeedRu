@@ -173,6 +173,7 @@ async def test_unload_rejects_a_late_blocking_adapter_result(hass) -> None:
     runtime.probe = probe
     runtime.runner = runner
     runtime.run_blocking = run_blocking
+    previous_measurement = runtime.measurement
 
     active_measurement = asyncio.create_task(runtime.async_measure())
     await adapter_started.wait()
@@ -183,7 +184,7 @@ async def test_unload_rejects_a_late_blocking_adapter_result(hass) -> None:
         await active_measurement
 
     assert error.value.code is MeasurementErrorCode.CANCELLED
-    assert runtime.measurement is None
+    assert runtime.measurement == previous_measurement
 
 
 async def test_last_good_port_is_preferred_before_ascending_fallbacks(hass) -> None:

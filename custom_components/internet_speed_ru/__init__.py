@@ -8,8 +8,21 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .catalog import FALLBACK_CATALOG
 from .catalog_runtime import CatalogUnavailableError, catalog_provider
-from .const import CATALOG_REFRESH_INTERVAL, CONF_SERVER, DOMAIN, NAME, PLATFORMS
+from .const import (
+    CATALOG_REFRESH_INTERVAL,
+    CONF_INTERVAL,
+    CONF_SERVER,
+    DATA_NOW,
+    DATA_PROBE,
+    DATA_RUNNER,
+    DATA_SCHEDULER_FACTORY,
+    DEFAULT_INTERVAL,
+    DOMAIN,
+    NAME,
+    PLATFORMS,
+)
 from .runtime import InternetSpeedRuRuntime, MeasurementError
+from .scheduling import HomeAssistantClockScheduler
 from .storage import HomeAssistantRuntimeStateStore
 
 type InternetSpeedRuConfigEntry = ConfigEntry[InternetSpeedRuRuntime]
@@ -31,8 +44,14 @@ async def _async_options_updated(
 ) -> None:
     """Apply a manual server change and trigger work only when idle."""
     hostname = entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
+    interval = entry.options.get(
+        CONF_INTERVAL, entry.data.get(CONF_INTERVAL, DEFAULT_INTERVAL)
+    )
     runtime = entry.runtime_data
     changed = hostname != runtime.server
+    runtime.update_interval(interval)
+    if not changed:
+        return
     try:
         await runtime.async_select_server(hostname)
     except CatalogUnavailableError, KeyError:
@@ -67,12 +86,27 @@ async def async_setup_entry(
                 raise ConfigEntryNotReady(
                     "Selected server is unavailable in every validated catalog"
                 ) from err
+    dependencies = hass.data.get(DOMAIN, {})
+    runtime_args = {}
+    if DATA_PROBE in dependencies:
+        runtime_args["probe"] = dependencies[DATA_PROBE]
+    if DATA_RUNNER in dependencies:
+        runtime_args["runner"] = dependencies[DATA_RUNNER]
+    if DATA_NOW in dependencies:
+        runtime_args["now"] = dependencies[DATA_NOW]
+    scheduler_factory = dependencies.get(
+        DATA_SCHEDULER_FACTORY, HomeAssistantClockScheduler
+    )
+    scheduler = scheduler_factory(hass)
+    if DATA_NOW not in dependencies:
+        runtime_args["now"] = scheduler.now
     entry.runtime_data = InternetSpeedRuRuntime(
         run_blocking=hass.async_add_executor_job,
         catalog_server=selected_server,
         configured_hostname=hostname,
         catalog_provider=provider,
         state_store=state_store,
+        **runtime_args,
     )
     await entry.runtime_data.async_restore()
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
@@ -94,6 +128,14 @@ async def async_setup_entry(
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    entry.runtime_data.start_schedule(
+        scheduler,
+        entry.options.get(
+            CONF_INTERVAL,
+            entry.data.get(CONF_INTERVAL, DEFAULT_INTERVAL),
+        ),
+    )
 
     return True
 

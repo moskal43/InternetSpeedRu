@@ -28,6 +28,17 @@
   },
   "options": {
     "step": {
+      "init": {
+        "menu_options": {
+          "city": "Изменить сервер",
+          "schedule": "Изменить расписание"
+        },
+        "title": "Настройки InternetSpeedRu"
+      },
+      "schedule": {
+        "data": {"interval": "Интервал замеров"},
+        "title": "Изменение расписания"
+      },
       "city": {
         "data": {"city": "Город"},
         "title": "Выбор города"
@@ -65,6 +76,19 @@
   "exceptions": {
     "busy": {"message": "Замер уже выполняется."},
     "measurement_failed": {"message": "Не удалось выполнить замер ({reason})."}
+  },
+  "selector": {
+    "schedule_interval": {
+      "options": {
+        "off": "Отключено",
+        "30m": "30 минут",
+        "1h": "1 час",
+        "3h": "3 часа",
+        "6h": "6 часов",
+        "12h": "12 часов",
+        "24h": "24 часа"
+      }
+    }
   },
   "title": "InternetSpeedRu"
 }
