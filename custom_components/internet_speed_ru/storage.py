@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 
+from .catalog import CatalogServer, ServerCatalog
 from .const import DOMAIN
 from .runtime import (
     Measurement,
@@ -16,6 +17,7 @@ from .runtime import (
     MeasurementStatus,
     PersistedRuntimeState,
 )
+from .selection import SelectedServer
 
 STORAGE_VERSION = 1
 
@@ -77,6 +79,18 @@ def _serialize_state(state: PersistedRuntimeState) -> dict[str, object]:
         "last_success": _serialize_datetime(state.last_success),
         "status": state.status.value if state.status is not None else None,
         "error": state.error.value if state.error is not None else None,
+        "last_ranking": _serialize_datetime(state.last_ranking),
+        "ranked_servers": [
+            {
+                "city": ranked.server.city,
+                "provider": ranked.server.provider,
+                "hostname": ranked.server.hostname,
+                "ports": list(ranked.server.ports),
+                "port": ranked.port,
+                "latency_ms": ranked.latency_ms,
+            }
+            for ranked in state.ranked_servers
+        ],
     }
 
 
@@ -105,6 +119,12 @@ def _port(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
         raise ValueError("invalid server port")
     return value
+
+
+def _ports(value: object) -> tuple[int, ...]:
+    if not isinstance(value, list):
+        raise TypeError("expected a port list")
+    return tuple(_port(port) for port in value)
 
 
 def _datetime(value: object) -> datetime | None:
@@ -148,6 +168,37 @@ def _optional_error(value: object) -> MeasurementErrorCode | None:
     return MeasurementErrorCode(_text(value))
 
 
+def _deserialize_ranked_servers(value: object) -> tuple[SelectedServer, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise TypeError("expected a ranked server list")
+    ranked: list[SelectedServer] = []
+    for item in value:
+        raw = _mapping(item)
+        server = ServerCatalog(
+            (
+                CatalogServer(
+                    city=_text(raw["city"]),
+                    provider=_text(raw["provider"]),
+                    hostname=_text(raw["hostname"]),
+                    ports=_ports(raw["ports"]),
+                ),
+            )
+        ).servers[0]
+        port = _port(raw["port"])
+        if port not in server.ports:
+            raise ValueError("ranked port is not offered by its server")
+        ranked.append(
+            SelectedServer(
+                server=server,
+                port=port,
+                latency_ms=_number(raw["latency_ms"]),
+            )
+        )
+    return tuple(ranked)
+
+
 def _deserialize_state(value: object) -> PersistedRuntimeState:
     raw = _mapping(value)
     return PersistedRuntimeState(
@@ -157,4 +208,6 @@ def _deserialize_state(value: object) -> PersistedRuntimeState:
         last_success=_datetime(raw["last_success"]),
         status=_optional_status(raw["status"]),
         error=_optional_error(raw["error"]),
+        last_ranking=_datetime(raw.get("last_ranking")),
+        ranked_servers=_deserialize_ranked_servers(raw.get("ranked_servers")),
     )

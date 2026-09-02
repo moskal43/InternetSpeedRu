@@ -20,6 +20,9 @@ CATALOG_URL = (
     "https://raw.githubusercontent.com/itdoginfo/russian-iperf3-servers/main/list.yml"
 )
 CATALOG_REFRESH_INTERVAL = timedelta(hours=24)
+AUTO_RANK_INTERVAL = timedelta(hours=24)
+AUTO_SWITCH_MIN_IMPROVEMENT_MS = 5.0
+AUTO_SWITCH_MIN_IMPROVEMENT_RATIO = 0.2
 
 CONF_CITY = "city"
 CONF_AUTO = "auto"

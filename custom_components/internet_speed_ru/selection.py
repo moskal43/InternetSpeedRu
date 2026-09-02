@@ -69,8 +69,13 @@ class AutoServerSelector:
             return None
         return SelectedServer(server, port, median(samples))
 
-    async def async_select(self, catalog: ServerCatalog) -> SelectedServer:
-        """Return the responsive server with the lowest stable median latency."""
+    async def async_rank(
+        self,
+        catalog: ServerCatalog,
+        *,
+        current_hostname: str | None = None,
+    ) -> tuple[SelectedServer, ...]:
+        """Return responsive candidates ordered by stable median latency."""
         responsive = tuple(
             result
             for result in await asyncio.gather(
@@ -85,6 +90,12 @@ class AutoServerSelector:
             responsive,
             key=lambda result: (result[2], result[0].hostname, result[1]),
         )[: self._candidate_count]
+        current = next(
+            (result for result in responsive if result[0].hostname == current_hostname),
+            None,
+        )
+        if current is not None and current not in candidates:
+            candidates.append(current)
         sampled = tuple(
             result
             for result in await asyncio.gather(
@@ -94,11 +105,17 @@ class AutoServerSelector:
         )
         if not sampled:
             raise AutoSelectionUnavailableError
-        return min(
-            sampled,
-            key=lambda result: (
-                result.latency_ms,
-                result.server.hostname,
-                result.port,
-            ),
+        return tuple(
+            sorted(
+                sampled,
+                key=lambda result: (
+                    result.latency_ms,
+                    result.server.hostname,
+                    result.port,
+                ),
+            )
         )
+
+    async def async_select(self, catalog: ServerCatalog) -> SelectedServer:
+        """Preserve the original single-winner selection contract."""
+        return (await self.async_rank(catalog))[0]
