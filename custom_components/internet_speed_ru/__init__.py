@@ -19,6 +19,7 @@ from .const import (
     DOMAIN,
     NAME,
     PLATFORMS,
+    effective_auto,
     effective_interval,
 )
 from .runtime import InternetSpeedRuRuntime, MeasurementError
@@ -43,22 +44,26 @@ async def _async_options_updated(
     entry: InternetSpeedRuConfigEntry,
 ) -> None:
     """Apply a manual server change and trigger work only when idle."""
-    hostname = entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
+    auto = effective_auto(entry)
+    hostname = entry.options.get(CONF_SERVER, entry.data.get(CONF_SERVER, ""))
     interval = effective_interval(entry)
     runtime = entry.runtime_data
-    changed = hostname != runtime.server
+    mode_changed = auto != runtime.auto
+    server_changed = hostname != runtime.server
     runtime.update_interval(interval)
-    if not changed:
+    if not mode_changed and (auto or not server_changed):
         return
-    try:
-        await runtime.async_select_server(hostname)
-    except CatalogUnavailableError, KeyError:
-        return
-    if changed and not runtime.running:
+    runtime.set_auto(auto)
+    if not auto:
+        try:
+            await runtime.async_select_server(hostname)
+        except CatalogUnavailableError, KeyError:
+            return
+    if not runtime.running:
         entry.async_create_background_task(
             hass,
             _async_measure_after_server_change(runtime),
-            "InternetSpeedRu measurement after server change",
+            "InternetSpeedRu measurement after selection change",
         )
 
 
@@ -67,7 +72,8 @@ async def async_setup_entry(
     entry: InternetSpeedRuConfigEntry,
 ) -> bool:
     """Set up InternetSpeedRu from a config entry."""
-    hostname = entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
+    auto = effective_auto(entry)
+    hostname = entry.options.get(CONF_SERVER, entry.data.get(CONF_SERVER, ""))
     provider = catalog_provider(hass)
     dependencies = hass.data.get(DOMAIN, {})
     state_store_factory = dependencies.get(
@@ -75,10 +81,17 @@ async def async_setup_entry(
     )
     state_store = state_store_factory(hass, entry.entry_id)
     selected_server = None
+    active_catalog = None
     try:
         selection = await provider.async_catalog()
-        selected_server = selection.catalog.get(hostname)
-    except CatalogUnavailableError, KeyError:
+        active_catalog = selection.catalog
+        if not auto:
+            selected_server = selection.catalog.get(hostname)
+    except (CatalogUnavailableError, KeyError) as err:
+        if auto:
+            raise ConfigEntryNotReady(
+                "No validated catalog is available for automatic selection"
+            ) from err
         try:
             selected_server = FALLBACK_CATALOG.get(hostname)
         except KeyError as err:
@@ -106,6 +119,8 @@ async def async_setup_entry(
         catalog_server=selected_server,
         configured_hostname=hostname,
         catalog_provider=provider,
+        catalog=active_catalog,
+        auto=auto,
         state_store=state_store,
         **runtime_args,
     )

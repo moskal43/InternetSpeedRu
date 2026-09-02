@@ -11,6 +11,10 @@
         "description": "InternetSpeedRu runs active tests through a public Iperf3 server. Each measurement can saturate download and upload for about 10 seconds per direction. Automatic measurements default to once every 24 hours and can be changed or disabled later.",
         "title": "Set up InternetSpeedRu"
       },
+      "selection": {
+        "data": {"auto": "Automatically select the best server"},
+        "title": "Choose server selection mode"
+      },
       "city": {
         "data": {"city": "City"},
         "description": "Catalog source: {catalog_source}. A cache or bundled fallback can be older or contain fewer servers than the remote catalog.",
@@ -30,10 +34,14 @@
     "step": {
       "init": {
         "menu_options": {
-          "city": "Change server",
+          "selection": "Change server selection",
           "schedule": "Change schedule"
         },
         "title": "InternetSpeedRu options"
+      },
+      "selection": {
+        "data": {"auto": "Automatically select the best server"},
+        "title": "Choose server selection mode"
       },
       "schedule": {
         "data": {"interval": "Measurement interval"},

@@ -14,6 +14,7 @@ from custom_components.internet_speed_ru.catalog_runtime import (
     CatalogSource,
 )
 from custom_components.internet_speed_ru.const import (
+    CONF_AUTO,
     CONF_CITY,
     CONF_INTERVAL,
     CONF_PROVIDER,
@@ -25,7 +26,7 @@ from custom_components.internet_speed_ru.runtime import (
     MeasurementError,
     MeasurementErrorCode,
 )
-from tests.helpers import async_configure_kirov_entry
+from tests.helpers import async_configure_auto_entry, async_configure_kirov_entry
 
 
 class FakeCatalogStore:
@@ -66,6 +67,31 @@ REMOTE_CATALOG = """\
 """
 
 
+async def test_auto_selection_is_enabled_by_default_and_hides_manual_fields(
+    hass,
+) -> None:
+    """Setup creates an Auto entry without asking for manual server details."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_USER},
+    )
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "selection"
+    field = next(iter(result["data_schema"].schema))
+    assert field.schema == CONF_AUTO
+    assert field.default() is True
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_AUTO: True}
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {CONF_AUTO: True, CONF_INTERVAL: "24h"}
+
+
 async def test_user_can_configure_integration_once(hass) -> None:
     """A user selects a catalog server through the manual cascade once."""
     result = await hass.config_entries.flow.async_init(
@@ -78,6 +104,10 @@ async def test_user_can_configure_integration_once(hass) -> None:
     assert not result["errors"]
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_AUTO: False}
+    )
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "city"
@@ -104,6 +134,7 @@ async def test_user_can_configure_integration_once(hass) -> None:
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "InternetSpeedRu"
     assert result["data"] == {
+        CONF_AUTO: False,
         CONF_SERVER: "st.kirov.ertelecom.ru",
         CONF_INTERVAL: "24h",
     }
@@ -154,6 +185,9 @@ async def test_runtime_remote_catalog_is_used_and_not_fetched_twice_in_24h(
         context={"source": config_entries.SOURCE_USER},
     )
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_AUTO: False}
+    )
 
     assert result["step_id"] == "city"
     assert "Kazan" in result["data_schema"]({CONF_CITY: "Kazan"}).values()
@@ -175,7 +209,10 @@ async def test_runtime_remote_catalog_is_used_and_not_fetched_twice_in_24h(
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
     options = await hass.config_entries.options.async_configure(
-        options["flow_id"], {"next_step_id": "city"}
+        options["flow_id"], {"next_step_id": "selection"}
+    )
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {CONF_AUTO: False}
     )
     assert options["step_id"] == "city"
     assert requests == 1
@@ -190,7 +227,10 @@ async def test_runtime_remote_catalog_is_used_and_not_fetched_twice_in_24h(
 
     refreshed_options = await hass.config_entries.options.async_init(entry.entry_id)
     refreshed_options = await hass.config_entries.options.async_configure(
-        refreshed_options["flow_id"], {"next_step_id": "city"}
+        refreshed_options["flow_id"], {"next_step_id": "selection"}
+    )
+    refreshed_options = await hass.config_entries.options.async_configure(
+        refreshed_options["flow_id"], {CONF_AUTO: False}
     )
     assert refreshed_options["description_placeholders"] == {
         "catalog_source": CatalogSource.CACHE.value
@@ -229,6 +269,9 @@ async def test_invalid_remote_keeps_and_uses_last_known_good_cache(
         context={"source": config_entries.SOURCE_USER},
     )
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_AUTO: False}
+    )
 
     assert result["step_id"] == "city"
     assert result["description_placeholders"] == {
@@ -245,6 +288,9 @@ async def test_offline_setup_warns_when_using_bundled_fallback(hass) -> None:
         context={"source": config_entries.SOURCE_USER},
     )
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_AUTO: False}
+    )
 
     assert result["step_id"] == "city"
     assert result["description_placeholders"] == {
@@ -267,9 +313,12 @@ async def test_setup_stays_open_with_localized_error_when_all_catalogs_fail(
         context={"source": config_entries.SOURCE_USER},
     )
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_AUTO: True}
+    )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "user"
+    assert result["step_id"] == "selection"
     assert result["errors"] == {"base": "catalog_unavailable"}
     assert not hass.config_entries.async_entries(DOMAIN)
 
@@ -289,6 +338,7 @@ async def test_existing_remote_selection_restores_when_catalog_drops_server(
     )
     for user_input in (
         {},
+        {CONF_AUTO: False},
         {CONF_CITY: "Kazan"},
         {CONF_PROVIDER: "ExampleNet"},
         {CONF_SERVER: "speed.example.net"},
@@ -343,7 +393,10 @@ async def test_options_flow_changes_manual_server_through_same_cascade(hass) -> 
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
     options = await hass.config_entries.options.async_configure(
-        options["flow_id"], {"next_step_id": "city"}
+        options["flow_id"], {"next_step_id": "selection"}
+    )
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {CONF_AUTO: False}
     )
     assert options["step_id"] == "city"
 
@@ -362,7 +415,93 @@ async def test_options_flow_changes_manual_server_through_same_cascade(hass) -> 
     )
 
     assert options["type"] is FlowResultType.CREATE_ENTRY
-    assert options["data"] == {CONF_SERVER: "spd-rudp.hostkey.ru"}
+    assert options["data"] == {
+        CONF_AUTO: False,
+        CONF_SERVER: "spd-rudp.hostkey.ru",
+    }
+
+
+async def test_options_switch_from_manual_to_auto_ranks_and_measures(hass) -> None:
+    """Enabling Auto hides the cascade and immediately selects by latency."""
+    entry = await async_configure_kirov_entry(hass)
+    attempts: list[str] = []
+    completed = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    async def probe(server: str, port: int) -> float:
+        attempts.append(server)
+        return 1.0 if server == "spd-rudp.hostkey.ru" else 20.0
+
+    entry.runtime_data.probe = probe
+
+    def runner(server: str, port: int, reverse: bool) -> float:
+        if server == "spd-rudp.hostkey.ru" and not reverse:
+            loop.call_soon_threadsafe(completed.set)
+        return 50.0
+
+    entry.runtime_data.runner = runner
+
+    options = await hass.config_entries.options.async_init(entry.entry_id)
+    assert set(options["menu_options"]) == {"schedule", "selection"}
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {"next_step_id": "selection"}
+    )
+    field = next(iter(options["data_schema"].schema))
+    assert field.schema == CONF_AUTO
+    assert field.default() is False
+
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {CONF_AUTO: True}
+    )
+    await asyncio.wait_for(completed.wait(), timeout=1)
+    await hass.async_block_till_done()
+
+    assert options["type"] is FlowResultType.CREATE_ENTRY
+    assert options["data"][CONF_AUTO] is True
+    assert entry.runtime_data.auto is True
+    assert entry.runtime_data.measurement.server == "spd-rudp.hostkey.ru"
+    assert "spd-rudp.hostkey.ru" in attempts
+
+
+async def test_options_switch_from_auto_to_selected_manual_server(hass) -> None:
+    """Disabling Auto reveals the cascade and measures only its selected server."""
+    entry = await async_configure_auto_entry(hass)
+    attempted_servers: list[str] = []
+    started = asyncio.Event()
+
+    async def probe(server: str, port: int) -> float:
+        attempted_servers.append(server)
+        started.set()
+        return 10.0
+
+    entry.runtime_data.probe = probe
+    entry.runtime_data.runner = lambda server, port, reverse: 50.0
+
+    options = await hass.config_entries.options.async_init(entry.entry_id)
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {"next_step_id": "selection"}
+    )
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {CONF_AUTO: False}
+    )
+    assert options["step_id"] == "city"
+    for user_input in (
+        {CONF_CITY: "Киров"},
+        {CONF_PROVIDER: "ЭР-Телеком"},
+        {CONF_SERVER: "st.kirov.ertelecom.ru"},
+    ):
+        options = await hass.config_entries.options.async_configure(
+            options["flow_id"], user_input
+        )
+
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await hass.async_block_till_done()
+
+    assert options["type"] is FlowResultType.CREATE_ENTRY
+    assert options["data"][CONF_AUTO] is False
+    assert entry.runtime_data.auto is False
+    assert entry.runtime_data.measurement.server == "st.kirov.ertelecom.ru"
+    assert set(attempted_servers) == {"st.kirov.ertelecom.ru"}
 
 
 async def test_server_change_starts_measurement_when_idle(hass) -> None:
@@ -384,7 +523,10 @@ async def test_server_change_starts_measurement_when_idle(hass) -> None:
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
     options = await hass.config_entries.options.async_configure(
-        options["flow_id"], {"next_step_id": "city"}
+        options["flow_id"], {"next_step_id": "selection"}
+    )
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {CONF_AUTO: False}
     )
     options = await hass.config_entries.options.async_configure(
         options["flow_id"], {CONF_CITY: "Москва"}
@@ -422,7 +564,10 @@ async def test_server_change_during_measurement_does_not_queue_another(hass) -> 
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
     options = await hass.config_entries.options.async_configure(
-        options["flow_id"], {"next_step_id": "city"}
+        options["flow_id"], {"next_step_id": "selection"}
+    )
+    options = await hass.config_entries.options.async_configure(
+        options["flow_id"], {CONF_AUTO: False}
     )
     options = await hass.config_entries.options.async_configure(
         options["flow_id"], {CONF_CITY: "Москва"}

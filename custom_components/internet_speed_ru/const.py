@@ -22,6 +22,7 @@ CATALOG_URL = (
 CATALOG_REFRESH_INTERVAL = timedelta(hours=24)
 
 CONF_CITY = "city"
+CONF_AUTO = "auto"
 CONF_PROVIDER = "provider"
 CONF_SERVER = "server"
 CONF_INTERVAL = "interval"
@@ -66,9 +67,17 @@ def effective_interval(entry: ConfigEntry[Any]) -> str:
         return DEFAULT_INTERVAL
 
 
+def effective_auto(entry: ConfigEntry[Any]) -> bool:
+    """Resolve Auto while preserving manual behavior for older entries."""
+    value = entry.options.get(CONF_AUTO, entry.data.get(CONF_AUTO, False))
+    return value if isinstance(value, bool) else False
+
+
 PLATFORMS = (Platform.SENSOR, Platform.BUTTON)
 
 IPERF3_DURATION = 10
 IPERF3_STREAMS = 4
 TCP_PROBE_COUNT = 3
 TCP_PROBE_TIMEOUT = 5.0
+AUTO_PROBE_CONCURRENCY = 5
+AUTO_CANDIDATE_COUNT = 3
