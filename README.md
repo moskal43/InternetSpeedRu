@@ -11,7 +11,7 @@ InternetSpeedRu — пользовательская интеграция Home A
 
 ## Гарантированная платформа
 
-Гарантированный baseline версии `v0.1.2`:
+Гарантированный baseline версии `v0.1.3`:
 
 - Home Assistant OS;
 - Home Assistant Core 2026.8+;
@@ -19,7 +19,7 @@ InternetSpeedRu — пользовательская интеграция Home A
 
 Home Assistant Container, Supervised и Core Python installation допускаются
 только в режиме **best effort**: они не входят в гарантированный support scope
-`v0.1.2`. Версии Home Assistant Core ниже 2026.8 не поддерживаются.
+`v0.1.3`. Версии Home Assistant Core ниже 2026.8 не поддерживаются.
 
 ## Установка через HACS custom repository
 
@@ -152,7 +152,7 @@ fallback.
 
 InternetSpeedRu is a HACS custom integration for atomic download, upload, and
 TCP-latency measurements through public Iperf3 servers in Russia. The guaranteed
-`v0.1.2` baseline is Home Assistant OS with Home Assistant Core 2026.8+; Container,
+`v0.1.3` baseline is Home Assistant OS with Home Assistant Core 2026.8+; Container,
 Supervised, and Core Python installations are best effort.
 
 Add `https://github.com/moskal43/InternetSpeedRu` to HACS as a custom
@@ -179,7 +179,7 @@ UV_CACHE_DIR=/private/tmp/internetspeedru-uv-cache uv run ruff format --check .
 ```
 
 Каждый release проходит HACS Action, Hassfest (manifest и translations), pytest
-и ruff. `mypy` не является release gate `v0.1.2`.
+и ruff. `mypy` не является release gate `v0.1.3`.
 
 ## Лицензия
 
