@@ -1,6 +1,7 @@
 """Public server catalog behavior tests."""
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -52,3 +53,9 @@ def test_catalog_rejects_invalid_or_duplicate_entries(entries) -> None:
     """An invalid catalog can never become a source of selectable servers."""
     with pytest.raises(InvalidCatalogError):
         ServerCatalog(entries)
+
+
+def test_full_upstream_catalog_is_not_vendored() -> None:
+    """The upstream runtime dataset is absent from source and test fixtures."""
+    project_root = Path(__file__).parent.parent
+    assert not list(project_root.glob("**/list.yml"))

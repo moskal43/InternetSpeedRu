@@ -6,8 +6,19 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
 
-from .catalog import FALLBACK_CATALOG
-from .const import CONF_CITY, CONF_PROVIDER, CONF_SERVER, DOMAIN, NAME
+from .catalog import ServerCatalog
+from .catalog_runtime import (
+    CatalogSource,
+    CatalogUnavailableError,
+    catalog_provider,
+)
+from .const import (
+    CONF_CITY,
+    CONF_PROVIDER,
+    CONF_SERVER,
+    DOMAIN,
+    NAME,
+)
 
 
 class _ManualServerCascade:
@@ -18,6 +29,17 @@ class _ManualServerCascade:
     def __init__(self) -> None:
         self._city: str | None = None
         self._provider: str | None = None
+        self._catalog: ServerCatalog | None = None
+        self._catalog_source: CatalogSource | None = None
+
+    async def _async_load_catalog(self) -> bool:
+        try:
+            selection = await catalog_provider(cast(Any, self).hass).async_catalog()
+        except CatalogUnavailableError:
+            return False
+        self._catalog = selection.catalog
+        self._catalog_source = selection.source
+        return True
 
     async def async_step_city(
         self,
@@ -25,14 +47,28 @@ class _ManualServerCascade:
     ) -> ConfigFlowResult:
         """Select the server city."""
         flow = cast(Any, self)
+        if self._catalog is None and not await self._async_load_catalog():
+            return flow.async_show_form(
+                step_id="user",
+                data_schema=vol.Schema({}),
+                errors={"base": "catalog_unavailable"},
+            )
+        assert self._catalog is not None
         if user_input is not None:
             self._city = user_input[CONF_CITY]
             return await self.async_step_provider()
         return flow.async_show_form(
             step_id="city",
             data_schema=vol.Schema(
-                {vol.Required(CONF_CITY): vol.In(FALLBACK_CATALOG.cities)}
+                {vol.Required(CONF_CITY): vol.In(self._catalog.cities)}
             ),
+            description_placeholders={
+                "catalog_source": (
+                    self._catalog_source.value
+                    if self._catalog_source is not None
+                    else CatalogSource.FALLBACK.value
+                )
+            },
         )
 
     async def async_step_provider(
@@ -41,6 +77,7 @@ class _ManualServerCascade:
     ) -> ConfigFlowResult:
         """Select a provider available in the chosen city."""
         flow = cast(Any, self)
+        assert self._catalog is not None
         assert self._city is not None
         if user_input is not None:
             self._provider = user_input[CONF_PROVIDER]
@@ -50,7 +87,7 @@ class _ManualServerCascade:
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_PROVIDER): vol.In(
-                        FALLBACK_CATALOG.providers(self._city)
+                        self._catalog.providers(self._city)
                     )
                 }
             ),
@@ -62,9 +99,10 @@ class _ManualServerCascade:
     ) -> ConfigFlowResult:
         """Select a catalog server without accepting arbitrary endpoints."""
         flow = cast(Any, self)
+        assert self._catalog is not None
         assert self._city is not None
         assert self._provider is not None
-        servers = FALLBACK_CATALOG.servers_for(self._city, self._provider)
+        servers = self._catalog.servers_for(self._city, self._provider)
         if user_input is not None:
             return flow.async_create_entry(
                 title=self._entry_title,

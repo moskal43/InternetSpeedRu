@@ -40,3 +40,12 @@ async def test_config_flow_warning_is_available_in_english_and_russian(hass) -> 
     assert english[description_key] == EN_WARNING
     assert russian[title_key] == "Настройка InternetSpeedRu"
     assert russian[description_key] == RU_WARNING
+
+    error_key = f"component.{DOMAIN}.config.error.catalog_unavailable"
+    assert english[error_key] == (
+        "No valid server catalog is available. Check the connection and try again."
+    )
+    assert russian[error_key] == (
+        "Нет доступного валидного каталога серверов. "
+        "Проверьте подключение и повторите попытку."
+    )

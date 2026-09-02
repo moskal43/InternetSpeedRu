@@ -1,5 +1,8 @@
 {
   "config": {
+    "error": {
+      "catalog_unavailable": "No valid server catalog is available. Check the connection and try again."
+    },
     "abort": {
       "single_instance_allowed": "Only one InternetSpeedRu instance can be configured."
     },
@@ -10,6 +13,7 @@
       },
       "city": {
         "data": {"city": "City"},
+        "description": "Catalog source: {catalog_source}. A cache or bundled fallback can be older or contain fewer servers than the remote catalog.",
         "title": "Select a city"
       },
       "provider": {

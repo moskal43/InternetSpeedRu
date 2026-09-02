@@ -13,6 +13,7 @@ from typing import Any, Protocol, TypeVar
 from homeassistant.core import callback
 
 from .catalog import FALLBACK_CATALOG, CatalogServer, ordered_ports
+from .catalog_runtime import CatalogProviderProtocol, CatalogUnavailableError
 from .const import (
     TCP_PROBE_COUNT,
     TCP_PROBE_TIMEOUT,
@@ -134,15 +135,23 @@ class InternetSpeedRuRuntime:
         probe: LatencyProbe = async_tcp_latency_probe,
         runner: IperfRunner = run_iperf_phase,
         catalog_server: CatalogServer | None = None,
+        configured_hostname: str | None = None,
+        catalog_provider: CatalogProviderProtocol | None = None,
         state_store: RuntimeStateStore | None = None,
     ) -> None:
         self.run_blocking = run_blocking
         self.probe = probe
         self.runner = runner
-        self._selected_server = catalog_server or FALLBACK_CATALOG.get(
-            "st.kirov.ertelecom.ru"
+        if catalog_server is None and configured_hostname is None:
+            catalog_server = FALLBACK_CATALOG.get("st.kirov.ertelecom.ru")
+        self._selected_server = catalog_server
+        self._configured_hostname = (
+            catalog_server.hostname
+            if catalog_server is not None
+            else configured_hostname or ""
         )
-        self.port = self._selected_server.ports[0]
+        self.catalog_provider = catalog_provider
+        self.port = self._selected_server.ports[0] if self._selected_server else 0
         self._last_good_ports: dict[str, int] = {}
         self._state_store = state_store
 
@@ -198,23 +207,51 @@ class InternetSpeedRuRuntime:
     @property
     def server(self) -> str:
         """Return the currently selected manual server hostname."""
-        return self._selected_server.hostname
+        return self._configured_hostname
 
     @property
     def server_city(self) -> str:
         """Return the city of the currently selected server."""
-        return self._selected_server.city
+        if self._selected_server is not None:
+            return self._selected_server.city
+        if self.measurement is not None and self.measurement.server == self.server:
+            return self.measurement.server_city
+        return ""
 
     @property
     def server_provider(self) -> str:
         """Return the provider of the currently selected server."""
-        return self._selected_server.provider
+        if self._selected_server is not None:
+            return self._selected_server.provider
+        if self.measurement is not None and self.measurement.server == self.server:
+            return self.measurement.server_provider
+        return ""
 
     @callback
     def select_server(self, server: CatalogServer) -> None:
         """Change the server used by future measurements without queueing work."""
         self._selected_server = server
+        self._configured_hostname = server.hostname
         self.port = self._last_good_ports.get(server.hostname, server.ports[0])
+
+    async def async_select_server(self, hostname: str) -> None:
+        """Select a hostname from the active validated runtime catalog."""
+        if self.catalog_provider is None:
+            self.select_server(FALLBACK_CATALOG.get(hostname))
+            return
+        selection = await self.catalog_provider.async_catalog()
+        self.select_server(selection.catalog.get(hostname))
+
+    async def async_refresh_catalog(self) -> None:
+        """Refresh catalog metadata without changing observable measurement state."""
+        if self.catalog_provider is None:
+            return
+        try:
+            selection = await self.catalog_provider.async_catalog()
+            server = selection.catalog.get(self.server)
+        except CatalogUnavailableError, KeyError:
+            return
+        self.select_server(server)
 
     @callback
     def async_add_listener(self, listener: RuntimeListener) -> Callable[[], None]:
@@ -237,6 +274,15 @@ class InternetSpeedRuRuntime:
             raise MeasurementError(MeasurementErrorCode.CANCELLED)
         if self._running:
             raise MeasurementBusyError
+
+        if self._selected_server is None:
+            unavailable = MeasurementError(MeasurementErrorCode.UNREACHABLE)
+            self.last_attempt = datetime.now(UTC)
+            self.status = MeasurementStatus.ERROR
+            self.error = unavailable.code
+            self._notify()
+            await self._async_persist()
+            raise unavailable
 
         self._running = True
         generation = self._generation

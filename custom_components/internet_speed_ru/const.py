@@ -1,9 +1,17 @@
 """Constants for InternetSpeedRu."""
 
+from datetime import timedelta
+
 from homeassistant.const import Platform
 
 DOMAIN = "internet_speed_ru"
 NAME = "InternetSpeedRu"
+DATA_CATALOG_PROVIDER = "catalog_provider"
+
+CATALOG_URL = (
+    "https://raw.githubusercontent.com/itdoginfo/russian-iperf3-servers/main/list.yml"
+)
+CATALOG_REFRESH_INTERVAL = timedelta(hours=24)
 
 CONF_CITY = "city"
 CONF_PROVIDER = "provider"

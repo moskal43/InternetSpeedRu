@@ -2,10 +2,13 @@
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.event import async_track_time_interval
 
 from .catalog import FALLBACK_CATALOG
-from .const import CONF_SERVER, DOMAIN, NAME, PLATFORMS
+from .catalog_runtime import CatalogUnavailableError, catalog_provider
+from .const import CATALOG_REFRESH_INTERVAL, CONF_SERVER, DOMAIN, NAME, PLATFORMS
 from .runtime import InternetSpeedRuRuntime, MeasurementError
 from .storage import HomeAssistantRuntimeStateStore
 
@@ -30,7 +33,10 @@ async def _async_options_updated(
     hostname = entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
     runtime = entry.runtime_data
     changed = hostname != runtime.server
-    runtime.select_server(FALLBACK_CATALOG.get(hostname))
+    try:
+        await runtime.async_select_server(hostname)
+    except CatalogUnavailableError, KeyError:
+        return
     if changed and not runtime.running:
         entry.async_create_background_task(
             hass,
@@ -44,15 +50,39 @@ async def async_setup_entry(
     entry: InternetSpeedRuConfigEntry,
 ) -> bool:
     """Set up InternetSpeedRu from a config entry."""
+    hostname = entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
+    provider = catalog_provider(hass)
+    state_store = HomeAssistantRuntimeStateStore(hass, entry.entry_id)
+    selected_server = None
+    try:
+        selection = await provider.async_catalog()
+        selected_server = selection.catalog.get(hostname)
+    except CatalogUnavailableError, KeyError:
+        try:
+            selected_server = FALLBACK_CATALOG.get(hostname)
+        except KeyError as err:
+            persisted = await state_store.async_load()
+            measurement = persisted.measurement if persisted is not None else None
+            if measurement is None or measurement.server != hostname:
+                raise ConfigEntryNotReady(
+                    "Selected server is unavailable in every validated catalog"
+                ) from err
     entry.runtime_data = InternetSpeedRuRuntime(
         run_blocking=hass.async_add_executor_job,
-        catalog_server=FALLBACK_CATALOG.get(
-            entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
-        ),
-        state_store=HomeAssistantRuntimeStateStore(hass, entry.entry_id),
+        catalog_server=selected_server,
+        configured_hostname=hostname,
+        catalog_provider=provider,
+        state_store=state_store,
     )
     await entry.runtime_data.async_restore()
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            lambda _now: entry.runtime_data.async_refresh_catalog(),
+            CATALOG_REFRESH_INTERVAL,
+        )
+    )
 
     dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id,
