@@ -20,6 +20,10 @@ from custom_components.internet_speed_ru.const import (
     DATA_CATALOG_PROVIDER,
     DOMAIN,
 )
+from custom_components.internet_speed_ru.runtime import (
+    MeasurementError,
+    MeasurementErrorCode,
+)
 from tests.helpers import async_configure_kirov_entry
 
 
@@ -306,6 +310,22 @@ async def test_existing_remote_selection_restores_when_catalog_drops_server(
     assert entry.runtime_data.measurement is not None
     assert entry.runtime_data.measurement.server == "speed.example.net"
     assert entry.runtime_data.status.value == "success"
+
+    previous_attempt = entry.runtime_data.last_attempt
+    with pytest.raises(MeasurementError) as error:
+        await entry.runtime_data.async_measure()
+
+    assert error.value.code is MeasurementErrorCode.UNREACHABLE
+    assert entry.runtime_data.measurement.server == "speed.example.net"
+    assert entry.runtime_data.status.value == "error"
+    assert entry.runtime_data.error is MeasurementErrorCode.UNREACHABLE
+    assert entry.runtime_data.last_attempt != previous_attempt
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.measurement.server == "speed.example.net"
+    assert entry.runtime_data.status.value == "error"
+    assert entry.runtime_data.error is MeasurementErrorCode.UNREACHABLE
 
 
 async def test_options_flow_changes_manual_server_through_same_cascade(hass) -> None:

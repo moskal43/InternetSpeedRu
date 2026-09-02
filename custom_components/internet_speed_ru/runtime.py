@@ -276,7 +276,13 @@ class InternetSpeedRuRuntime:
             raise MeasurementBusyError
 
         if self._selected_server is None:
-            raise MeasurementError(MeasurementErrorCode.UNREACHABLE)
+            unavailable = MeasurementError(MeasurementErrorCode.UNREACHABLE)
+            self.last_attempt = datetime.now(UTC)
+            self.status = MeasurementStatus.ERROR
+            self.error = unavailable.code
+            self._notify()
+            await self._async_persist()
+            raise unavailable
 
         self._running = True
         generation = self._generation
