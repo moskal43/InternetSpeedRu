@@ -56,7 +56,7 @@ async def test_diagnostics_are_an_explicit_support_whitelist(hass) -> None:
     assert status is not None
     assert status.attributes["mode"] == "manual"
     assert diagnostics == {
-        "version": "0.1.2",
+        "version": "0.1.3",
         "mode": "manual",
         "interval": "24h",
         "server": {
