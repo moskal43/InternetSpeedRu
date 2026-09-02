@@ -85,8 +85,32 @@ class Measurement:
     upload_mbps: float
     latency_ms: float
     server: str
+    server_city: str
+    server_provider: str
     port: int
     measured_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PersistedRuntimeState:
+    """The bounded runtime state restored after a restart."""
+
+    measurement: Measurement | None
+    schedule_baseline: datetime | None
+    last_attempt: datetime | None
+    last_success: datetime | None
+    status: MeasurementStatus | None
+    error: MeasurementErrorCode | None
+
+
+class RuntimeStateStore(Protocol):
+    """Persist the latest runtime state for one config entry."""
+
+    async def async_load(self) -> PersistedRuntimeState | None:
+        """Load the latest compatible runtime state."""
+
+    async def async_save(self, state: PersistedRuntimeState) -> None:
+        """Replace the stored runtime state."""
 
 
 async def async_tcp_latency_probe(server: str, port: int) -> float:
@@ -110,6 +134,7 @@ class InternetSpeedRuRuntime:
         probe: LatencyProbe = async_tcp_latency_probe,
         runner: IperfRunner = run_iperf_phase,
         catalog_server: CatalogServer | None = None,
+        state_store: RuntimeStateStore | None = None,
     ) -> None:
         self.run_blocking = run_blocking
         self.probe = probe
@@ -119,8 +144,10 @@ class InternetSpeedRuRuntime:
         )
         self.port = self._selected_server.ports[0]
         self._last_good_ports: dict[str, int] = {}
+        self._state_store = state_store
 
         self.measurement: Measurement | None = None
+        self.schedule_baseline: datetime | None = None
         self.status: MeasurementStatus | None = None
         self.error: MeasurementErrorCode | None = None
         self.last_attempt: datetime | None = None
@@ -131,6 +158,38 @@ class InternetSpeedRuRuntime:
         self._generation = 0
         self._unloaded = False
 
+    async def async_restore(self) -> None:
+        """Restore persisted values without performing network work."""
+        if self._state_store is None:
+            return
+        state = await self._state_store.async_load()
+        if state is None:
+            return
+        self.measurement = state.measurement
+        self.schedule_baseline = state.schedule_baseline
+        self.last_attempt = state.last_attempt
+        self.last_success = state.last_success
+        self.status = state.status
+        self.error = state.error
+        if state.measurement is not None:
+            self._last_good_ports[state.measurement.server] = state.measurement.port
+            if state.measurement.server == self.server:
+                self.port = state.measurement.port
+
+    async def _async_persist(self) -> None:
+        if self._state_store is None:
+            return
+        await self._state_store.async_save(
+            PersistedRuntimeState(
+                measurement=self.measurement,
+                schedule_baseline=self.schedule_baseline,
+                last_attempt=self.last_attempt,
+                last_success=self.last_success,
+                status=self.status,
+                error=self.error,
+            )
+        )
+
     @property
     def running(self) -> bool:
         """Return whether a measurement owns the single execution slot."""
@@ -140,6 +199,16 @@ class InternetSpeedRuRuntime:
     def server(self) -> str:
         """Return the currently selected manual server hostname."""
         return self._selected_server.hostname
+
+    @property
+    def server_city(self) -> str:
+        """Return the city of the currently selected server."""
+        return self._selected_server.city
+
+    @property
+    def server_provider(self) -> str:
+        """Return the provider of the currently selected server."""
+        return self._selected_server.provider
 
     @callback
     def select_server(self, server: CatalogServer) -> None:
@@ -176,6 +245,7 @@ class InternetSpeedRuRuntime:
         self.error = None
         self.last_attempt = datetime.now(UTC)
         self._notify()
+        await self._async_persist()
 
         try:
             latency_samples: list[float] | None = None
@@ -238,6 +308,8 @@ class InternetSpeedRuRuntime:
                 upload_mbps=upload_mbps,
                 latency_ms=median(latency_samples),
                 server=selected_server.hostname,
+                server_city=selected_server.city,
+                server_provider=selected_server.provider,
                 port=selected_port,
                 measured_at=datetime.now(UTC),
             )
@@ -249,6 +321,7 @@ class InternetSpeedRuRuntime:
                 self.status = MeasurementStatus.ERROR
                 self.error = normalized.code
                 self._notify()
+                await self._async_persist()
             raise normalized from err
         else:
             self._last_good_ports[completed.server] = completed.port
@@ -257,7 +330,9 @@ class InternetSpeedRuRuntime:
             self.status = MeasurementStatus.SUCCESS
             self.error = None
             self.last_success = completed.measured_at
+            self.schedule_baseline = completed.measured_at
             self._notify()
+            await self._async_persist()
             return completed
         finally:
             if generation == self._generation:
