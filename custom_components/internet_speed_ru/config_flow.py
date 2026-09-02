@@ -14,6 +14,7 @@ from .catalog_runtime import (
     catalog_provider,
 )
 from .const import (
+    CONF_AUTO,
     CONF_CITY,
     CONF_INTERVAL,
     CONF_PROVIDER,
@@ -22,6 +23,7 @@ from .const import (
     DOMAIN,
     NAME,
     SCHEDULE_INTERVALS,
+    effective_auto,
     effective_interval,
 )
 
@@ -114,6 +116,7 @@ class _ManualServerCascade:
             return flow.async_create_entry(
                 title=self._entry_title,
                 data={
+                    CONF_AUTO: False,
                     CONF_SERVER: user_input[CONF_SERVER],
                     CONF_INTERVAL: DEFAULT_INTERVAL,
                 },
@@ -151,7 +154,32 @@ class InternetSpeedRuConfigFlow(
                 data_schema=vol.Schema({}),
             )
 
-        return await self.async_step_city()
+        return await self.async_step_selection()
+
+    async def async_step_selection(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose Auto or reveal the manual catalog cascade."""
+        if user_input is not None:
+            if user_input[CONF_AUTO]:
+                if self._catalog is None and not await self._async_load_catalog():
+                    return self.async_show_form(
+                        step_id="selection",
+                        data_schema=vol.Schema(
+                            {vol.Required(CONF_AUTO, default=True): bool}
+                        ),
+                        errors={"base": "catalog_unavailable"},
+                    )
+                return self.async_create_entry(
+                    title=self._entry_title,
+                    data={CONF_AUTO: True, CONF_INTERVAL: DEFAULT_INTERVAL},
+                )
+            return await self.async_step_city()
+        return self.async_show_form(
+            step_id="selection",
+            data_schema=vol.Schema({vol.Required(CONF_AUTO, default=True): bool}),
+        )
 
     @staticmethod
     def async_get_options_flow(
@@ -173,7 +201,24 @@ class InternetSpeedRuOptionsFlow(_ManualServerCascade, config_entries.OptionsFlo
         """Choose which independent option to change."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=("schedule", "city"),
+            menu_options=("schedule", "selection"),
+        )
+
+    async def async_step_selection(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose Auto or reveal the manual catalog cascade."""
+        current = effective_auto(self.config_entry)
+        if user_input is not None:
+            if user_input[CONF_AUTO]:
+                options = dict(self.config_entry.options)
+                options[CONF_AUTO] = True
+                return self.async_create_entry(title="", data=options)
+            return await self.async_step_city()
+        return self.async_show_form(
+            step_id="selection",
+            data_schema=vol.Schema({vol.Required(CONF_AUTO, default=current): bool}),
         )
 
     async def async_step_schedule(
@@ -210,5 +255,6 @@ class InternetSpeedRuOptionsFlow(_ManualServerCascade, config_entries.OptionsFlo
         if user_input is None:
             return await super().async_step_server()
         options = dict(self.config_entry.options)
+        options[CONF_AUTO] = False
         options[CONF_SERVER] = user_input[CONF_SERVER]
         return self.async_create_entry(title="", data=options)

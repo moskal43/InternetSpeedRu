@@ -88,7 +88,7 @@ async def test_options_flow_offers_only_supported_schedule_presets(hass) -> None
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.MENU
-    assert set(result["menu_options"]) == {"schedule", "city"}
+    assert set(result["menu_options"]) == {"schedule", "selection"}
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"next_step_id": "schedule"}

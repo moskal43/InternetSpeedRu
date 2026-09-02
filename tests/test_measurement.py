@@ -8,14 +8,24 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.internet_speed_ru import InternetSpeedRuConfigEntry
-from custom_components.internet_speed_ru.const import DOMAIN
+from custom_components.internet_speed_ru.catalog import CatalogServer, ServerCatalog
+from custom_components.internet_speed_ru.catalog_runtime import (
+    CatalogSelection,
+    CatalogSource,
+)
+from custom_components.internet_speed_ru.const import (
+    DATA_CATALOG_PROVIDER,
+    DATA_PROBE,
+    DATA_RUNNER,
+    DOMAIN,
+)
 from custom_components.internet_speed_ru.runtime import (
     IperfPreTransferError,
     MeasurementBusyError,
     MeasurementError,
     MeasurementErrorCode,
 )
-from tests.helpers import async_configure_kirov_entry
+from tests.helpers import async_configure_auto_entry, async_configure_kirov_entry
 
 
 async def _configured_entry(hass) -> InternetSpeedRuConfigEntry:
@@ -42,6 +52,68 @@ async def _press_run_measurement(hass, entry: InternetSpeedRuConfigEntry) -> Non
         {"entity_id": _button_entity_id(hass, entry)},
         blocking=True,
     )
+
+
+async def test_auto_ranks_catalog_then_measures_and_exposes_selected_context(
+    hass,
+) -> None:
+    """Auto pins the lowest-median server for the ordinary atomic measurement."""
+    catalog = ServerCatalog(
+        (
+            CatalogServer("Far", "FastNet", "fast.example.net", (5202,)),
+            CatalogServer("Near", "SlowNet", "slow.example.net", (5201,)),
+        )
+    )
+
+    class Provider:
+        async def async_catalog(self) -> CatalogSelection:
+            return CatalogSelection(catalog, CatalogSource.REMOTE, None)
+
+    samples = {
+        "fast.example.net": iter((10.0, 9.0, 11.0, 30.0, 20.0, 25.0, 15.0, 16.0, 14.0)),
+        "slow.example.net": iter((40.0, 39.0, 41.0)),
+    }
+    probe_counts = {hostname: 0 for hostname in samples}
+
+    async def probe(server: str, port: int) -> float:
+        probe_counts[server] += 1
+        return next(samples[server])
+
+    hass.data[DOMAIN][DATA_CATALOG_PROVIDER] = Provider()
+    hass.data[DOMAIN][DATA_PROBE] = probe
+    hass.data[DOMAIN][DATA_RUNNER] = lambda server, port, reverse: (
+        80.0 if reverse else 30.0
+    )
+
+    entry = await async_configure_auto_entry(hass)
+
+    assert entry.runtime_data.measurement is not None
+    assert entry.runtime_data.measurement.server == "fast.example.net"
+    assert entry.runtime_data.measurement.latency_ms == 25.0
+    status = hass.states.get("sensor.internetspeedru_last_measurement_status")
+    assert status is not None
+    assert {
+        key: status.attributes[key] for key in ("server", "city", "provider", "port")
+    } == {
+        "server": "fast.example.net",
+        "city": "Far",
+        "provider": "FastNet",
+        "port": 5202,
+    }
+    assert (
+        er.async_get(hass).async_get_entity_id(
+            Platform.SENSOR,
+            DOMAIN,
+            f"{entry.entry_id}_status",
+        )
+        == "sensor.internetspeedru_last_measurement_status"
+    )
+
+    await _press_run_measurement(hass, entry)
+
+    assert entry.runtime_data.measurement.server == "fast.example.net"
+    assert entry.runtime_data.measurement.latency_ms == 15.0
+    assert probe_counts == {"fast.example.net": 9, "slow.example.net": 3}
 
 
 async def test_manual_measurement_publishes_five_entities_atomically(hass) -> None:

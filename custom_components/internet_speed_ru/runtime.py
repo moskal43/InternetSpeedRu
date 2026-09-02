@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from homeassistant.core import callback
 
-from .catalog import FALLBACK_CATALOG, CatalogServer, ordered_ports
+from .catalog import FALLBACK_CATALOG, CatalogServer, ServerCatalog, ordered_ports
 from .catalog_runtime import CatalogProviderProtocol, CatalogUnavailableError
 from .const import (
     TCP_PROBE_COUNT,
@@ -24,6 +24,7 @@ from .iperf import (
     IperfPreTransferError,
     run_iperf_phase,
 )
+from .selection import AutoSelectionUnavailableError, AutoServerSelector
 
 if TYPE_CHECKING:
     from .scheduling import ClockScheduler, MeasurementSchedule
@@ -145,6 +146,8 @@ class InternetSpeedRuRuntime:
         catalog_server: CatalogServer | None = None,
         configured_hostname: str | None = None,
         catalog_provider: CatalogProviderProtocol | None = None,
+        catalog: ServerCatalog | None = None,
+        auto: bool = False,
         state_store: RuntimeStateStore | None = None,
         now: Now = _utcnow,
     ) -> None:
@@ -160,6 +163,9 @@ class InternetSpeedRuRuntime:
             else configured_hostname or ""
         )
         self.catalog_provider = catalog_provider
+        self._catalog = catalog
+        self._auto = auto
+        self._ranking_required = auto
         self.port = self._selected_server.ports[0] if self._selected_server else 0
         self._last_good_ports: dict[str, int] = {}
         self._state_store = state_store
@@ -194,6 +200,15 @@ class InternetSpeedRuRuntime:
         self.error = state.error
         if state.measurement is not None:
             self._last_good_ports[state.measurement.server] = state.measurement.port
+            if self._catalog is not None:
+                try:
+                    restored_server = self._catalog.get(state.measurement.server)
+                except KeyError:
+                    pass
+                else:
+                    self.select_server(restored_server)
+                    if self._auto:
+                        self._ranking_required = False
             if state.measurement.server == self.server:
                 self.port = state.measurement.port
 
@@ -240,6 +255,11 @@ class InternetSpeedRuRuntime:
         return self._running
 
     @property
+    def auto(self) -> bool:
+        """Return whether latency-based automatic selection is enabled."""
+        return self._auto
+
+    @property
     def server(self) -> str:
         """Return the currently selected manual server hostname."""
         return self._configured_hostname
@@ -269,12 +289,20 @@ class InternetSpeedRuRuntime:
         self._configured_hostname = server.hostname
         self.port = self._last_good_ports.get(server.hostname, server.ports[0])
 
+    @callback
+    def set_auto(self, enabled: bool) -> None:
+        """Change selection mode without queueing a measurement."""
+        if enabled and not self._auto:
+            self._ranking_required = True
+        self._auto = enabled
+
     async def async_select_server(self, hostname: str) -> None:
         """Select a hostname from the active validated runtime catalog."""
         if self.catalog_provider is None:
             self.select_server(FALLBACK_CATALOG.get(hostname))
             return
         selection = await self.catalog_provider.async_catalog()
+        self._catalog = selection.catalog
         self.select_server(selection.catalog.get(hostname))
 
     async def async_refresh_catalog(self) -> None:
@@ -283,10 +311,24 @@ class InternetSpeedRuRuntime:
             return
         try:
             selection = await self.catalog_provider.async_catalog()
+            self._catalog = selection.catalog
             server = selection.catalog.get(self.server)
         except CatalogUnavailableError, KeyError:
             return
         self.select_server(server)
+
+    async def _async_rank_server(self, generation: int) -> None:
+        if self.catalog_provider is not None:
+            selection = await self.catalog_provider.async_catalog()
+            self._catalog = selection.catalog
+        if self._catalog is None:
+            raise AutoSelectionUnavailableError
+        selected = await AutoServerSelector(self.probe).async_select(self._catalog)
+        self._ensure_current(generation)
+        self.select_server(selected.server)
+        self._last_good_ports[selected.server.hostname] = selected.port
+        self.port = selected.port
+        self._ranking_required = False
 
     @callback
     def async_add_listener(self, listener: RuntimeListener) -> Callable[[], None]:
@@ -314,7 +356,8 @@ class InternetSpeedRuRuntime:
         if self._running:
             raise MeasurementBusyError
 
-        if self._selected_server is None:
+        needs_ranking = self._auto and self._ranking_required
+        if self._selected_server is None and not needs_ranking:
             unavailable = MeasurementError(MeasurementErrorCode.UNREACHABLE)
             if schedule_baseline is not None:
                 self.schedule_baseline = schedule_baseline
@@ -329,7 +372,6 @@ class InternetSpeedRuRuntime:
         if schedule_baseline is not None:
             self.schedule_baseline = schedule_baseline
         generation = self._generation
-        selected_server = self._selected_server
         self.status = MeasurementStatus.RUNNING
         self.error = None
         self.last_attempt = self._now()
@@ -337,6 +379,11 @@ class InternetSpeedRuRuntime:
         await self._async_persist()
 
         try:
+            if needs_ranking:
+                await self._async_rank_server(generation)
+            selected_server = self._selected_server
+            if selected_server is None:
+                raise AutoSelectionUnavailableError
             latency_samples: list[float] | None = None
             last_port_error: Exception | None = None
             selected_port: int | None = None
@@ -440,6 +487,8 @@ class InternetSpeedRuRuntime:
         if isinstance(err, socket.gaierror):
             return MeasurementErrorCode.DNS
         if isinstance(err, OSError):
+            return MeasurementErrorCode.UNREACHABLE
+        if isinstance(err, AutoSelectionUnavailableError):
             return MeasurementErrorCode.UNREACHABLE
         return MeasurementErrorCode.UNEXPECTED
 
