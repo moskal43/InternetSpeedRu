@@ -5,6 +5,10 @@ from homeassistant.const import Platform
 DOMAIN = "internet_speed_ru"
 NAME = "InternetSpeedRu"
 
+CONF_CITY = "city"
+CONF_PROVIDER = "provider"
+CONF_SERVER = "server"
+
 PLATFORMS = (Platform.SENSOR, Platform.BUTTON)
 
 IPERF3_SERVER = "st.kirov.ertelecom.ru"

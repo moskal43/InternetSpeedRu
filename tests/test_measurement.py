@@ -9,7 +9,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.internet_speed_ru import InternetSpeedRuConfigEntry
-from custom_components.internet_speed_ru.const import DOMAIN
+from custom_components.internet_speed_ru.const import (
+    CONF_CITY,
+    CONF_PROVIDER,
+    CONF_SERVER,
+    DOMAIN,
+)
 from custom_components.internet_speed_ru.runtime import (
     MeasurementBusyError,
     MeasurementError,
@@ -24,6 +29,15 @@ async def _configured_entry(hass) -> InternetSpeedRuConfigEntry:
         context={"source": config_entries.SOURCE_USER},
     )
     result = await hass.config_entries.flow.async_configure(flow["flow_id"], {})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_CITY: "Киров"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_PROVIDER: "ЭР-Телеком"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_SERVER: "st.kirov.ertelecom.ru"}
+    )
     await hass.async_block_till_done()
     return result["result"]
 
@@ -197,3 +211,75 @@ async def test_unload_rejects_a_late_blocking_adapter_result(hass) -> None:
 
     assert error.value.code is MeasurementErrorCode.CANCELLED
     assert runtime.measurement is None
+
+
+async def test_last_good_port_is_preferred_before_ascending_fallbacks(hass) -> None:
+    """A successful fallback port moves to the front of the next measurement."""
+    entry = await _configured_entry(hass)
+    runtime = entry.runtime_data
+    probed_ports: list[int] = []
+    reject_5201 = True
+
+    async def probe(server: str, port: int) -> float:
+        probed_ports.append(port)
+        if port == 5201 and reject_5201:
+            raise OSError
+        return 10.0
+
+    def runner(server: str, port: int, reverse: bool) -> float:
+        return 50.0
+
+    runtime.probe = probe
+    runtime.runner = runner
+
+    await runtime.async_measure()
+    assert probed_ports == [5201, 5202, 5202, 5202]
+
+    probed_ports.clear()
+    reject_5201 = False
+    await runtime.async_measure()
+    assert probed_ports == [5202, 5202, 5202]
+
+
+async def test_transfer_failure_does_not_retry_another_port(hass) -> None:
+    """Once throughput starts, an error ends the attempt without heavy retry."""
+    entry = await _configured_entry(hass)
+    runtime = entry.runtime_data
+    probed_ports: list[int] = []
+    transfer_ports: list[int] = []
+
+    async def probe(server: str, port: int) -> float:
+        probed_ports.append(port)
+        return 10.0
+
+    def runner(server: str, port: int, reverse: bool) -> float:
+        transfer_ports.append(port)
+        raise OSError
+
+    runtime.probe = probe
+    runtime.runner = runner
+
+    with pytest.raises(MeasurementError):
+        await runtime.async_measure()
+
+    assert probed_ports == [5201, 5201, 5201]
+    assert transfer_ports == [5201]
+
+
+async def test_manual_measurement_exhausts_only_the_selected_server(hass) -> None:
+    """Manual mode reports failure instead of switching to a hidden server."""
+    entry = await _configured_entry(hass)
+    runtime = entry.runtime_data
+    attempts: list[tuple[str, int]] = []
+
+    async def probe(server: str, port: int) -> float:
+        attempts.append((server, port))
+        raise OSError
+
+    runtime.probe = probe
+
+    with pytest.raises(MeasurementError) as error:
+        await runtime.async_measure()
+
+    assert error.value.code is MeasurementErrorCode.UNREACHABLE
+    assert attempts == [("st.kirov.ertelecom.ru", port) for port in range(5201, 5210)]

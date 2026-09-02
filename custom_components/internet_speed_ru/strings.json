@@ -7,6 +7,34 @@
       "user": {
         "description": "InternetSpeedRu runs active tests through a public Iperf3 server. Each measurement can saturate download and upload for about 10 seconds per direction. Automatic measurements default to once every 24 hours and can be changed or disabled later.",
         "title": "Set up InternetSpeedRu"
+      },
+      "city": {
+        "data": {"city": "City"},
+        "title": "Select a city"
+      },
+      "provider": {
+        "data": {"provider": "Provider"},
+        "title": "Select a provider"
+      },
+      "server": {
+        "data": {"server": "Server"},
+        "title": "Select a server"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "city": {
+        "data": {"city": "City"},
+        "title": "Select a city"
+      },
+      "provider": {
+        "data": {"provider": "Provider"},
+        "title": "Select a provider"
+      },
+      "server": {
+        "data": {"server": "Server"},
+        "title": "Select a server"
       }
     }
   },

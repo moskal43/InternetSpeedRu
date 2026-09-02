@@ -12,9 +12,8 @@ from typing import Any, Protocol, TypeVar
 
 from homeassistant.core import callback
 
+from .catalog import FALLBACK_CATALOG, CatalogServer, ordered_ports
 from .const import (
-    IPERF3_PORT,
-    IPERF3_SERVER,
     TCP_PROBE_COUNT,
     TCP_PROBE_TIMEOUT,
 )
@@ -105,14 +104,16 @@ class InternetSpeedRuRuntime:
         *,
         probe: LatencyProbe = async_tcp_latency_probe,
         runner: IperfRunner = run_iperf_phase,
-        server: str = IPERF3_SERVER,
-        port: int = IPERF3_PORT,
+        catalog_server: CatalogServer | None = None,
     ) -> None:
         self.run_blocking = run_blocking
         self.probe = probe
         self.runner = runner
-        self.server = server
-        self.port = port
+        self._selected_server = catalog_server or FALLBACK_CATALOG.get(
+            "st.kirov.ertelecom.ru"
+        )
+        self.port = self._selected_server.ports[0]
+        self.last_good_port: int | None = None
 
         self.measurement: Measurement | None = None
         self.status: MeasurementStatus | None = None
@@ -129,6 +130,19 @@ class InternetSpeedRuRuntime:
     def running(self) -> bool:
         """Return whether a measurement owns the single execution slot."""
         return self._running
+
+    @property
+    def server(self) -> str:
+        """Return the currently selected manual server hostname."""
+        return self._selected_server.hostname
+
+    @callback
+    def select_server(self, server: CatalogServer) -> None:
+        """Change the server used by future measurements without queueing work."""
+        self._selected_server = server
+        if self.last_good_port not in server.ports:
+            self.last_good_port = None
+            self.port = server.ports[0]
 
     @callback
     def async_add_listener(self, listener: RuntimeListener) -> Callable[[], None]:
@@ -154,23 +168,44 @@ class InternetSpeedRuRuntime:
 
         self._running = True
         generation = self._generation
+        selected_server = self._selected_server
         self.status = MeasurementStatus.RUNNING
         self.error = None
         self.last_attempt = datetime.now(UTC)
         self._notify()
 
         try:
-            latency_samples = []
-            for _ in range(TCP_PROBE_COUNT):
-                latency_samples.append(await self.probe(self.server, self.port))
-                self._ensure_current(generation)
+            latency_samples: list[float] | None = None
+            last_port_error: Exception | None = None
+            selected_port: int | None = None
+            for candidate_port in ordered_ports(selected_server, self.last_good_port):
+                self.port = candidate_port
+                try:
+                    samples = []
+                    for _ in range(TCP_PROBE_COUNT):
+                        samples.append(
+                            await self.probe(selected_server.hostname, candidate_port)
+                        )
+                        self._ensure_current(generation)
+                except MeasurementError:
+                    raise
+                except Exception as err:
+                    last_port_error = err
+                    continue
+                latency_samples = samples
+                selected_port = candidate_port
+                break
+
+            if latency_samples is None or selected_port is None:
+                assert last_port_error is not None
+                raise last_port_error
 
             download_mbps = await self.run_blocking(
-                self.runner, self.server, self.port, True
+                self.runner, selected_server.hostname, selected_port, True
             )
             self._ensure_current(generation)
             upload_mbps = await self.run_blocking(
-                self.runner, self.server, self.port, False
+                self.runner, selected_server.hostname, selected_port, False
             )
             self._ensure_current(generation)
 
@@ -178,8 +213,8 @@ class InternetSpeedRuRuntime:
                 download_mbps=download_mbps,
                 upload_mbps=upload_mbps,
                 latency_ms=median(latency_samples),
-                server=self.server,
-                port=self.port,
+                server=selected_server.hostname,
+                port=selected_port,
                 measured_at=datetime.now(UTC),
             )
         except MeasurementError:
@@ -192,6 +227,8 @@ class InternetSpeedRuRuntime:
                 self._notify()
             raise normalized from err
         else:
+            self.last_good_port = completed.port
+            self.port = completed.port
             self.measurement = completed
             self.status = MeasurementStatus.SUCCESS
             self.error = None
