@@ -15,6 +15,9 @@ from homeassistant.core import callback
 from .catalog import FALLBACK_CATALOG, CatalogServer, ServerCatalog, ordered_ports
 from .catalog_runtime import CatalogProviderProtocol, CatalogUnavailableError
 from .const import (
+    AUTO_RANK_INTERVAL,
+    AUTO_SWITCH_MIN_IMPROVEMENT_MS,
+    AUTO_SWITCH_MIN_IMPROVEMENT_RATIO,
     TCP_PROBE_COUNT,
     TCP_PROBE_TIMEOUT,
 )
@@ -24,7 +27,7 @@ from .iperf import (
     IperfPreTransferError,
     run_iperf_phase,
 )
-from .selection import AutoSelectionUnavailableError, AutoServerSelector
+from .selection import AutoSelectionUnavailableError, AutoServerSelector, SelectedServer
 
 if TYPE_CHECKING:
     from .scheduling import ClockScheduler, MeasurementSchedule
@@ -111,6 +114,8 @@ class PersistedRuntimeState:
     last_success: datetime | None
     status: MeasurementStatus | None
     error: MeasurementErrorCode | None
+    last_ranking: datetime | None
+    ranked_servers: tuple[SelectedServer, ...]
 
 
 class RuntimeStateStore(Protocol):
@@ -168,6 +173,7 @@ class InternetSpeedRuRuntime:
         self._ranking_required = auto
         self.port = self._selected_server.ports[0] if self._selected_server else 0
         self._last_good_ports: dict[str, int] = {}
+        self._ranked_servers: tuple[SelectedServer, ...] = ()
         self._state_store = state_store
         self._persist_lock = asyncio.Lock()
         self._now = now
@@ -179,6 +185,7 @@ class InternetSpeedRuRuntime:
         self.error: MeasurementErrorCode | None = None
         self.last_attempt: datetime | None = None
         self.last_success: datetime | None = None
+        self.last_ranking: datetime | None = None
 
         self._listeners: set[RuntimeListener] = set()
         self._running = False
@@ -198,6 +205,8 @@ class InternetSpeedRuRuntime:
         self.last_success = state.last_success
         self.status = state.status
         self.error = state.error
+        self.last_ranking = state.last_ranking
+        self._ranked_servers = state.ranked_servers
         if state.measurement is not None:
             self._last_good_ports[state.measurement.server] = state.measurement.port
             if self._catalog is not None:
@@ -224,6 +233,8 @@ class InternetSpeedRuRuntime:
                     last_success=self.last_success,
                     status=self.status,
                     error=self.error,
+                    last_ranking=self.last_ranking,
+                    ranked_servers=self._ranked_servers,
                 )
             )
 
@@ -323,12 +334,30 @@ class InternetSpeedRuRuntime:
             self._catalog = selection.catalog
         if self._catalog is None:
             raise AutoSelectionUnavailableError
-        selected = await AutoServerSelector(self.probe).async_select(self._catalog)
+        ranked = await AutoServerSelector(self.probe).async_rank(
+            self._catalog,
+            current_hostname=self.server or None,
+        )
         self._ensure_current(generation)
+        selected = ranked[0]
+        incumbent = next(
+            (item for item in ranked if item.server.hostname == self.server),
+            None,
+        )
+        if incumbent is not None and selected.server.hostname != self.server:
+            improvement = incumbent.latency_ms - selected.latency_ms
+            if (
+                improvement < AUTO_SWITCH_MIN_IMPROVEMENT_MS
+                or selected.latency_ms
+                > incumbent.latency_ms * (1 - AUTO_SWITCH_MIN_IMPROVEMENT_RATIO)
+            ):
+                selected = incumbent
+        self._ranked_servers = ranked
         self.select_server(selected.server)
         self._last_good_ports[selected.server.hostname] = selected.port
         self.port = selected.port
         self._ranking_required = False
+        self.last_ranking = self._now()
 
     @callback
     def async_add_listener(self, listener: RuntimeListener) -> Callable[[], None]:
@@ -356,7 +385,11 @@ class InternetSpeedRuRuntime:
         if self._running:
             raise MeasurementBusyError
 
-        needs_ranking = self._auto and self._ranking_required
+        needs_ranking = self._auto and (
+            self._ranking_required
+            or self.last_ranking is None
+            or self._now() - self.last_ranking >= AUTO_RANK_INTERVAL
+        )
         if self._selected_server is None and not needs_ranking:
             unavailable = MeasurementError(MeasurementErrorCode.UNREACHABLE)
             if schedule_baseline is not None:
@@ -387,52 +420,67 @@ class InternetSpeedRuRuntime:
             latency_samples: list[float] | None = None
             last_port_error: Exception | None = None
             selected_port: int | None = None
+            measured_server: CatalogServer | None = None
             download_mbps: float | None = None
             upload_mbps: float | None = None
-            for candidate_port in ordered_ports(
-                selected_server,
-                self._last_good_ports.get(selected_server.hostname),
-            ):
-                self.port = candidate_port
-                try:
-                    samples = []
-                    for _ in range(TCP_PROBE_COUNT):
-                        samples.append(
-                            await self.probe(selected_server.hostname, candidate_port)
+            measurement_servers = [selected_server]
+            if self._auto:
+                measurement_servers.extend(
+                    ranked.server
+                    for ranked in self._ranked_servers
+                    if ranked.server.hostname != selected_server.hostname
+                )
+            for candidate_server in measurement_servers:
+                for candidate_port in ordered_ports(
+                    candidate_server,
+                    self._last_good_ports.get(candidate_server.hostname),
+                ):
+                    self.port = candidate_port
+                    try:
+                        samples = []
+                        for _ in range(TCP_PROBE_COUNT):
+                            samples.append(
+                                await self.probe(
+                                    candidate_server.hostname, candidate_port
+                                )
+                            )
+                            self._ensure_current(generation)
+                    except MeasurementError:
+                        raise
+                    except Exception as err:
+                        last_port_error = err
+                        continue
+
+                    try:
+                        download_mbps = await self.run_blocking(
+                            self.runner,
+                            candidate_server.hostname,
+                            candidate_port,
+                            True,
                         )
                         self._ensure_current(generation)
-                except MeasurementError:
-                    raise
-                except Exception as err:
-                    last_port_error = err
-                    continue
+                    except IperfPreTransferError as err:
+                        last_port_error = err
+                        continue
 
-                try:
-                    download_mbps = await self.run_blocking(
+                    upload_mbps = await self.run_blocking(
                         self.runner,
-                        selected_server.hostname,
+                        candidate_server.hostname,
                         candidate_port,
-                        True,
+                        False,
                     )
                     self._ensure_current(generation)
-                except IperfPreTransferError as err:
-                    last_port_error = err
-                    continue
-
-                upload_mbps = await self.run_blocking(
-                    self.runner,
-                    selected_server.hostname,
-                    candidate_port,
-                    False,
-                )
-                self._ensure_current(generation)
-                latency_samples = samples
-                selected_port = candidate_port
-                break
+                    latency_samples = samples
+                    selected_port = candidate_port
+                    measured_server = candidate_server
+                    break
+                if measured_server is not None:
+                    break
 
             if (
                 latency_samples is None
                 or selected_port is None
+                or measured_server is None
                 or download_mbps is None
                 or upload_mbps is None
             ):
@@ -443,9 +491,9 @@ class InternetSpeedRuRuntime:
                 download_mbps=download_mbps,
                 upload_mbps=upload_mbps,
                 latency_ms=median(latency_samples),
-                server=selected_server.hostname,
-                server_city=selected_server.city,
-                server_provider=selected_server.provider,
+                server=measured_server.hostname,
+                server_city=measured_server.city,
+                server_provider=measured_server.provider,
                 port=selected_port,
                 measured_at=self._now(),
             )
@@ -460,6 +508,13 @@ class InternetSpeedRuRuntime:
                 await self._async_persist()
             raise normalized from err
         else:
+            if self._auto and completed.server != self.server:
+                successful_server = next(
+                    ranked.server
+                    for ranked in self._ranked_servers
+                    if ranked.server.hostname == completed.server
+                )
+                self.select_server(successful_server)
             self._last_good_ports[completed.server] = completed.port
             self.port = completed.port
             self.measurement = completed

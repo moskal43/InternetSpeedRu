@@ -9,15 +9,22 @@ import pytest
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.internet_speed_ru.catalog import CatalogServer, ServerCatalog
+from custom_components.internet_speed_ru.catalog_runtime import (
+    CatalogSelection,
+    CatalogSource,
+)
 from custom_components.internet_speed_ru.const import (
     CONF_INTERVAL,
+    DATA_CATALOG_PROVIDER,
+    DATA_PROBE,
     DATA_RUNNER,
     DATA_SCHEDULER_FACTORY,
     DATA_STATE_STORE_FACTORY,
     DOMAIN,
     SCHEDULE_INTERVALS,
 )
-from tests.helpers import async_configure_kirov_entry
+from tests.helpers import async_configure_auto_entry, async_configure_kirov_entry
 
 type TimerCallback = Callable[[], Awaitable[None] | None]
 
@@ -80,6 +87,39 @@ async def test_new_entry_uses_24h_default_and_measures_immediately(hass) -> None
     assert entry.data[CONF_INTERVAL] == "24h"
     assert entry.runtime_data.measurement is not None
     assert entry.runtime_data.schedule_baseline == entry.runtime_data.last_success
+
+
+async def test_scheduled_auto_measurements_share_the_daily_ranking_gate(
+    hass, fake_clock: FakeClock
+) -> None:
+    """A shorter speed-test schedule still ranks only after a full day."""
+    catalog = ServerCatalog(
+        (
+            CatalogServer("Fast", "A", "fast.example.net", (5201,)),
+            CatalogServer("Slow", "B", "slow.example.net", (5202,)),
+        )
+    )
+
+    class Provider:
+        async def async_catalog(self) -> CatalogSelection:
+            return CatalogSelection(catalog, CatalogSource.REMOTE, None)
+
+    probe_counts = {server.hostname: 0 for server in catalog.servers}
+
+    async def probe(server: str, port: int) -> float:
+        probe_counts[server] += 1
+        return 10.0 if server == "fast.example.net" else 30.0
+
+    hass.data[DOMAIN][DATA_CATALOG_PROVIDER] = Provider()
+    hass.data[DOMAIN][DATA_PROBE] = probe
+    entry = await async_configure_auto_entry(hass)
+    await fake_clock.async_advance(timedelta(0))
+    await _set_interval(hass, entry, "12h")
+
+    await fake_clock.async_advance(timedelta(hours=12))
+    assert probe_counts == {"fast.example.net": 9, "slow.example.net": 3}
+    await fake_clock.async_advance(timedelta(hours=12))
+    assert probe_counts == {"fast.example.net": 15, "slow.example.net": 6}
 
 
 async def test_options_flow_offers_only_supported_schedule_presets(hass) -> None:

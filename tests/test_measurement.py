@@ -1,6 +1,7 @@
 """Connection measurement behavior tests."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from homeassistant.const import Platform
@@ -15,6 +16,7 @@ from custom_components.internet_speed_ru.catalog_runtime import (
 )
 from custom_components.internet_speed_ru.const import (
     DATA_CATALOG_PROVIDER,
+    DATA_NOW,
     DATA_PROBE,
     DATA_RUNNER,
     DOMAIN,
@@ -114,6 +116,259 @@ async def test_auto_ranks_catalog_then_measures_and_exposes_selected_context(
     assert entry.runtime_data.measurement.server == "fast.example.net"
     assert entry.runtime_data.measurement.latency_ms == 15.0
     assert probe_counts == {"fast.example.net": 9, "slow.example.net": 3}
+
+
+async def test_auto_reranks_only_on_first_measurement_after_twenty_four_hours(
+    hass,
+) -> None:
+    """Frequent speed tests do not turn the daily ranking into background work."""
+    catalog = ServerCatalog(
+        (
+            CatalogServer("Fast", "A", "fast.example.net", (5201,)),
+            CatalogServer("Slow", "B", "slow.example.net", (5201,)),
+        )
+    )
+
+    class Provider:
+        async def async_catalog(self) -> CatalogSelection:
+            return CatalogSelection(catalog, CatalogSource.REMOTE, None)
+
+    probe_counts = {server.hostname: 0 for server in catalog.servers}
+
+    async def probe(server: str, port: int) -> float:
+        probe_counts[server] += 1
+        return 10.0 if server == "fast.example.net" else 30.0
+
+    hass.data[DOMAIN][DATA_CATALOG_PROVIDER] = Provider()
+    hass.data[DOMAIN][DATA_PROBE] = probe
+    current = [datetime(2026, 9, 2, tzinfo=UTC)]
+    hass.data[DOMAIN][DATA_NOW] = lambda: current[0]
+    entry = await async_configure_auto_entry(hass)
+
+    assert probe_counts == {"fast.example.net": 6, "slow.example.net": 3}
+    current[0] += timedelta(hours=23, minutes=59)
+    await entry.runtime_data.async_measure()
+    assert probe_counts == {"fast.example.net": 9, "slow.example.net": 3}
+
+    current[0] += timedelta(minutes=1)
+    await entry.runtime_data.async_measure()
+    assert probe_counts == {"fast.example.net": 15, "slow.example.net": 6}
+
+
+async def test_auto_hysteresis_requires_five_ms_and_twenty_percent(hass) -> None:
+    """Daily ranking keeps a healthy incumbent until both margins are met."""
+    catalog = ServerCatalog(
+        (
+            CatalogServer("Current", "A", "current.example.net", (5201,)),
+            CatalogServer("Candidate", "B", "candidate.example.net", (5201,)),
+        )
+    )
+
+    class Provider:
+        async def async_catalog(self) -> CatalogSelection:
+            return CatalogSelection(catalog, CatalogSource.REMOTE, None)
+
+    current = [datetime(2026, 9, 2, tzinfo=UTC)]
+    incumbent_latency = [20.0]
+    challenger_latency = [30.0]
+
+    async def probe(server: str, port: int) -> float:
+        return (
+            incumbent_latency[0]
+            if server == "current.example.net"
+            else challenger_latency[0]
+        )
+
+    hass.data[DOMAIN][DATA_CATALOG_PROVIDER] = Provider()
+    hass.data[DOMAIN][DATA_PROBE] = probe
+    hass.data[DOMAIN][DATA_NOW] = lambda: current[0]
+    entry = await async_configure_auto_entry(hass)
+    assert entry.runtime_data.measurement.server == "current.example.net"
+
+    challenger_latency[0] = 16.0
+    current[0] += timedelta(hours=24)
+    await entry.runtime_data.async_measure()
+    assert entry.runtime_data.measurement.server == "current.example.net"
+
+    incumbent_latency[0] = 30.0
+    challenger_latency[0] = 25.0
+    current[0] += timedelta(hours=24)
+    await entry.runtime_data.async_measure()
+    assert entry.runtime_data.measurement.server == "current.example.net"
+
+    challenger_latency[0] = 24.0
+    current[0] += timedelta(hours=24)
+    await entry.runtime_data.async_measure()
+    assert entry.runtime_data.measurement.server == "candidate.example.net"
+
+
+async def test_auto_failover_uses_next_ranked_server_before_transfer(hass) -> None:
+    """An unavailable Auto incumbent is bypassed once within the same attempt."""
+    catalog = ServerCatalog(
+        (
+            CatalogServer("Current", "A", "current.example.net", (5201, 5202)),
+            CatalogServer("Backup", "B", "backup.example.net", (5203,)),
+        )
+    )
+
+    class Provider:
+        async def async_catalog(self) -> CatalogSelection:
+            return CatalogSelection(catalog, CatalogSource.REMOTE, None)
+
+    fail_current = [False]
+    probed: list[tuple[str, int]] = []
+
+    async def probe(server: str, port: int) -> float:
+        probed.append((server, port))
+        if fail_current[0] and server == "current.example.net":
+            raise OSError
+        return 10.0 if server == "current.example.net" else 30.0
+
+    transferred: list[str] = []
+
+    def runner(server: str, port: int, reverse: bool) -> float:
+        transferred.append(server)
+        return 50.0
+
+    hass.data[DOMAIN][DATA_CATALOG_PROVIDER] = Provider()
+    hass.data[DOMAIN][DATA_PROBE] = probe
+    hass.data[DOMAIN][DATA_RUNNER] = runner
+    entry = await async_configure_auto_entry(hass)
+    probed.clear()
+    transferred.clear()
+    fail_current[0] = True
+
+    await entry.runtime_data.async_measure()
+
+    assert probed == [
+        ("current.example.net", 5201),
+        ("current.example.net", 5202),
+        ("backup.example.net", 5203),
+        ("backup.example.net", 5203),
+        ("backup.example.net", 5203),
+    ]
+    assert transferred == ["backup.example.net", "backup.example.net"]
+    assert entry.runtime_data.measurement.server == "backup.example.net"
+    assert entry.runtime_data.server == "backup.example.net"
+    assert entry.runtime_data.port == 5203
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    assert entry.runtime_data.server == "backup.example.net"
+    assert entry.runtime_data.port == 5203
+
+
+async def test_auto_ranking_age_and_candidates_survive_reload(hass) -> None:
+    """Restarting Home Assistant neither reranks early nor loses failover order."""
+    catalog = ServerCatalog(
+        (
+            CatalogServer("Current", "A", "current.example.net", (5201,)),
+            CatalogServer("Backup", "B", "backup.example.net", (5202,)),
+        )
+    )
+
+    class Provider:
+        async def async_catalog(self) -> CatalogSelection:
+            return CatalogSelection(catalog, CatalogSource.REMOTE, None)
+
+    fail_current = [False]
+    probe_counts = {server.hostname: 0 for server in catalog.servers}
+
+    async def probe(server: str, port: int) -> float:
+        probe_counts[server] += 1
+        if fail_current[0] and server == "current.example.net":
+            raise OSError
+        return 10.0 if server == "current.example.net" else 30.0
+
+    hass.data[DOMAIN][DATA_CATALOG_PROVIDER] = Provider()
+    hass.data[DOMAIN][DATA_PROBE] = probe
+    entry = await async_configure_auto_entry(hass)
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    probe_counts.update({hostname: 0 for hostname in probe_counts})
+    fail_current[0] = True
+
+    await entry.runtime_data.async_measure()
+
+    assert probe_counts == {"current.example.net": 1, "backup.example.net": 3}
+    assert entry.runtime_data.measurement.server == "backup.example.net"
+
+
+async def test_auto_control_errors_fail_over_across_ranked_servers(hass) -> None:
+    """Control failures may exhaust incumbent ports and then one ranked backup."""
+    catalog = ServerCatalog(
+        (
+            CatalogServer("Current", "A", "current.example.net", (5201, 5202)),
+            CatalogServer("Backup", "B", "backup.example.net", (5203,)),
+        )
+    )
+
+    class Provider:
+        async def async_catalog(self) -> CatalogSelection:
+            return CatalogSelection(catalog, CatalogSource.REMOTE, None)
+
+    async def probe(server: str, port: int) -> float:
+        return 10.0 if server == "current.example.net" else 30.0
+
+    reject_current = [False]
+    attempts: list[tuple[str, int, bool]] = []
+
+    def runner(server: str, port: int, reverse: bool) -> float:
+        attempts.append((server, port, reverse))
+        if reject_current[0] and server == "current.example.net":
+            raise IperfPreTransferError
+        return 50.0
+
+    hass.data[DOMAIN][DATA_CATALOG_PROVIDER] = Provider()
+    hass.data[DOMAIN][DATA_PROBE] = probe
+    hass.data[DOMAIN][DATA_RUNNER] = runner
+    entry = await async_configure_auto_entry(hass)
+    attempts.clear()
+    reject_current[0] = True
+
+    await entry.runtime_data.async_measure()
+
+    assert attempts == [
+        ("current.example.net", 5201, True),
+        ("current.example.net", 5202, True),
+        ("backup.example.net", 5203, True),
+        ("backup.example.net", 5203, False),
+    ]
+
+
+async def test_auto_transfer_failure_never_tries_another_server(hass) -> None:
+    """Once download starts, a heavy failure ends the bounded Auto attempt."""
+    catalog = ServerCatalog(
+        (
+            CatalogServer("Current", "A", "current.example.net", (5201,)),
+            CatalogServer("Backup", "B", "backup.example.net", (5202,)),
+        )
+    )
+
+    class Provider:
+        async def async_catalog(self) -> CatalogSelection:
+            return CatalogSelection(catalog, CatalogSource.REMOTE, None)
+
+    async def probe(server: str, port: int) -> float:
+        return 10.0 if server == "current.example.net" else 30.0
+
+    fail_transfer = [False]
+    attempts: list[str] = []
+
+    def runner(server: str, port: int, reverse: bool) -> float:
+        attempts.append(server)
+        if fail_transfer[0]:
+            raise OSError
+        return 50.0
+
+    hass.data[DOMAIN][DATA_CATALOG_PROVIDER] = Provider()
+    hass.data[DOMAIN][DATA_PROBE] = probe
+    hass.data[DOMAIN][DATA_RUNNER] = runner
+    entry = await async_configure_auto_entry(hass)
+    attempts.clear()
+    fail_transfer[0] = True
+
+    with pytest.raises(MeasurementError):
+        await entry.runtime_data.async_measure()
+
+    assert attempts == ["current.example.net"]
 
 
 async def test_manual_measurement_publishes_five_entities_atomically(hass) -> None:
