@@ -5,7 +5,7 @@ import tomllib
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
-RELEASE_VERSION = "0.1.0"
+RELEASE_VERSION = "0.1.1"
 
 
 def test_release_metadata_and_license_are_consistent() -> None:

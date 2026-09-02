@@ -24,7 +24,7 @@ async def test_home_assistant_manifest_contract(hass) -> None:
         "name": "InternetSpeedRu",
         "requirements": ["iperf3==0.1.11"],
         "single_config_entry": True,
-        "version": "0.1.0",
+        "version": "0.1.1",
     }
 
     assert {key: integration.manifest[key] for key in expected} == expected
