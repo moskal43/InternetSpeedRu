@@ -16,7 +16,6 @@ from .catalog import FALLBACK_CATALOG, CatalogServer, ordered_ports
 from .catalog_runtime import (
     CatalogProviderProtocol,
     CatalogSelection,
-    CatalogSource,
     CatalogUnavailableError,
 )
 from .const import (
@@ -333,8 +332,7 @@ class InternetSpeedRuRuntime:
             self.select_server(FALLBACK_CATALOG.get(hostname))
             return
         selection = await self.catalog_provider.async_catalog()
-        self._catalog = selection.catalog
-        self._set_catalog_metadata(selection.source, selection.updated_at)
+        self._apply_catalog_selection(selection)
         self.select_server(selection.catalog.get(hostname))
 
     async def async_refresh_catalog(self) -> None:
@@ -343,8 +341,7 @@ class InternetSpeedRuRuntime:
             return
         try:
             selection = await self.catalog_provider.async_catalog()
-            self._catalog = selection.catalog
-            self._set_catalog_metadata(selection.source, selection.updated_at)
+            self._apply_catalog_selection(selection)
             server = selection.catalog.get(self.server)
         except CatalogUnavailableError, KeyError:
             return
@@ -353,8 +350,7 @@ class InternetSpeedRuRuntime:
     async def _async_rank_server(self, generation: int) -> None:
         if self.catalog_provider is not None:
             selection = await self.catalog_provider.async_catalog()
-            self._catalog = selection.catalog
-            self._set_catalog_metadata(selection.source, selection.updated_at)
+            self._apply_catalog_selection(selection)
         if self._catalog is None:
             raise AutoSelectionUnavailableError
         ranked = await AutoServerSelector(self.probe).async_rank(
@@ -383,14 +379,11 @@ class InternetSpeedRuRuntime:
         self.last_ranking = self._now()
 
     @callback
-    def _set_catalog_metadata(
-        self,
-        source: CatalogSource,
-        updated_at: datetime | None,
-    ) -> None:
-        """Retain support-safe metadata for the active validated catalog."""
-        self.catalog_source = source
-        self.catalog_updated_at = updated_at
+    def _apply_catalog_selection(self, selection: CatalogSelection) -> None:
+        """Atomically retain a validated catalog and its support-safe metadata."""
+        self._catalog = selection.catalog
+        self.catalog_source = selection.source
+        self.catalog_updated_at = selection.updated_at
 
     @property
     def catalog_age_seconds(self) -> float | None:
