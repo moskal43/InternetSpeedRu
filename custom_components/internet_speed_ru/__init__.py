@@ -2,10 +2,11 @@
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import async_track_time_interval
 
-from .catalog import FALLBACK_CATALOG
+from .catalog import FALLBACK_CATALOG, CatalogServer
 from .catalog_runtime import CatalogUnavailableError, catalog_provider
 from .const import CATALOG_REFRESH_INTERVAL, CONF_SERVER, DOMAIN, NAME, PLATFORMS
 from .runtime import InternetSpeedRuRuntime, MeasurementError
@@ -51,16 +52,31 @@ async def async_setup_entry(
     """Set up InternetSpeedRu from a config entry."""
     hostname = entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
     provider = catalog_provider(hass)
+    state_store = HomeAssistantRuntimeStateStore(hass, entry.entry_id)
     try:
         selection = await provider.async_catalog()
         selected_server = selection.catalog.get(hostname)
     except CatalogUnavailableError, KeyError:
-        selected_server = FALLBACK_CATALOG.get(hostname)
+        try:
+            selected_server = FALLBACK_CATALOG.get(hostname)
+        except KeyError as err:
+            persisted = await state_store.async_load()
+            measurement = persisted.measurement if persisted is not None else None
+            if measurement is None or measurement.server != hostname:
+                raise ConfigEntryNotReady(
+                    "Selected server is unavailable in every validated catalog"
+                ) from err
+            selected_server = CatalogServer(
+                city=measurement.server_city,
+                provider=measurement.server_provider,
+                hostname=measurement.server,
+                ports=(measurement.port,),
+            )
     entry.runtime_data = InternetSpeedRuRuntime(
         run_blocking=hass.async_add_executor_job,
         catalog_server=selected_server,
         catalog_provider=provider,
-        state_store=HomeAssistantRuntimeStateStore(hass, entry.entry_id),
+        state_store=state_store,
     )
     await entry.runtime_data.async_restore()
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))

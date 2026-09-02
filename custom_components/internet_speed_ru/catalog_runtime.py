@@ -129,6 +129,7 @@ class CatalogProvider:
             except Exception as err:
                 _LOGGER.warning("Unable to refresh server catalog: %s", err)
                 self._state = attempted
+                self._selection = None
                 await self._safe_save(attempted)
                 return self._local_selection()
 

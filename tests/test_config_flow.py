@@ -119,6 +119,8 @@ async def test_runtime_remote_catalog_is_used_and_not_fetched_twice_in_24h(
     async def fetch() -> str:
         nonlocal requests
         requests += 1
+        if requests == 2:
+            raise OSError("offline")
         return REMOTE_CATALOG
 
     stale_cache = ServerCatalog(
@@ -174,6 +176,11 @@ async def test_runtime_remote_catalog_is_used_and_not_fetched_twice_in_24h(
     current_time = datetime(2026, 9, 3, 9, tzinfo=UTC)
     await entry.runtime_data.async_refresh_catalog()
     assert requests == 2
+
+    refreshed_options = await hass.config_entries.options.async_init(entry.entry_id)
+    assert refreshed_options["description_placeholders"] == {
+        "catalog_source": CatalogSource.CACHE.value
+    }
 
 
 @pytest.mark.parametrize("payload", ["", REMOTE_CATALOG + "- Name: Broken\n"])
@@ -251,6 +258,54 @@ async def test_setup_stays_open_with_localized_error_when_all_catalogs_fail(
     assert result["step_id"] == "user"
     assert result["errors"] == {"base": "catalog_unavailable"}
     assert not hass.config_entries.async_entries(DOMAIN)
+
+
+async def test_existing_remote_selection_restores_when_catalog_drops_server(
+    hass,
+) -> None:
+    """A catalog refresh cannot discard an existing entry's entities or status."""
+
+    async def original_remote() -> str:
+        return REMOTE_CATALOG
+
+    _install_catalog_provider(hass, original_remote)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_USER},
+    )
+    for user_input in (
+        {},
+        {CONF_CITY: "Kazan"},
+        {CONF_PROVIDER: "ExampleNet"},
+        {CONF_SERVER: "speed.example.net"},
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input
+        )
+    entry = result["result"]
+    await hass.async_block_till_done()
+
+    entry.runtime_data.probe = lambda server, port: asyncio.sleep(0, result=10.0)
+    entry.runtime_data.runner = lambda server, port, reverse: 50.0
+    await entry.runtime_data.async_measure()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+    async def replacement_remote() -> str:
+        return """\
+- Name: OtherNet Omsk
+  City: Omsk
+  address: other.example.net
+  port: 5201
+"""
+
+    _install_catalog_provider(hass, replacement_remote)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.server == "speed.example.net"
+    assert entry.runtime_data.measurement is not None
+    assert entry.runtime_data.measurement.server == "speed.example.net"
+    assert entry.runtime_data.status.value == "success"
 
 
 async def test_options_flow_changes_manual_server_through_same_cascade(hass) -> None:
