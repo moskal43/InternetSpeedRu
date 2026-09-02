@@ -17,7 +17,12 @@ from .const import (
     TCP_PROBE_COUNT,
     TCP_PROBE_TIMEOUT,
 )
-from .iperf import InvalidIperfResultError, IperfExecutionError, run_iperf_phase
+from .iperf import (
+    InvalidIperfResultError,
+    IperfExecutionError,
+    IperfPreTransferError,
+    run_iperf_phase,
+)
 
 _ResultT = TypeVar("_ResultT")
 type RuntimeListener = Callable[[], None]
@@ -113,7 +118,7 @@ class InternetSpeedRuRuntime:
             "st.kirov.ertelecom.ru"
         )
         self.port = self._selected_server.ports[0]
-        self.last_good_port: int | None = None
+        self._last_good_ports: dict[str, int] = {}
 
         self.measurement: Measurement | None = None
         self.status: MeasurementStatus | None = None
@@ -140,9 +145,7 @@ class InternetSpeedRuRuntime:
     def select_server(self, server: CatalogServer) -> None:
         """Change the server used by future measurements without queueing work."""
         self._selected_server = server
-        if self.last_good_port not in server.ports:
-            self.last_good_port = None
-            self.port = server.ports[0]
+        self.port = self._last_good_ports.get(server.hostname, server.ports[0])
 
     @callback
     def async_add_listener(self, listener: RuntimeListener) -> Callable[[], None]:
@@ -178,7 +181,12 @@ class InternetSpeedRuRuntime:
             latency_samples: list[float] | None = None
             last_port_error: Exception | None = None
             selected_port: int | None = None
-            for candidate_port in ordered_ports(selected_server, self.last_good_port):
+            download_mbps: float | None = None
+            upload_mbps: float | None = None
+            for candidate_port in ordered_ports(
+                selected_server,
+                self._last_good_ports.get(selected_server.hostname),
+            ):
                 self.port = candidate_port
                 try:
                     samples = []
@@ -192,22 +200,38 @@ class InternetSpeedRuRuntime:
                 except Exception as err:
                     last_port_error = err
                     continue
+
+                try:
+                    download_mbps = await self.run_blocking(
+                        self.runner,
+                        selected_server.hostname,
+                        candidate_port,
+                        True,
+                    )
+                    self._ensure_current(generation)
+                except IperfPreTransferError as err:
+                    last_port_error = err
+                    continue
+
+                upload_mbps = await self.run_blocking(
+                    self.runner,
+                    selected_server.hostname,
+                    candidate_port,
+                    False,
+                )
+                self._ensure_current(generation)
                 latency_samples = samples
                 selected_port = candidate_port
                 break
 
-            if latency_samples is None or selected_port is None:
+            if (
+                latency_samples is None
+                or selected_port is None
+                or download_mbps is None
+                or upload_mbps is None
+            ):
                 assert last_port_error is not None
                 raise last_port_error
-
-            download_mbps = await self.run_blocking(
-                self.runner, selected_server.hostname, selected_port, True
-            )
-            self._ensure_current(generation)
-            upload_mbps = await self.run_blocking(
-                self.runner, selected_server.hostname, selected_port, False
-            )
-            self._ensure_current(generation)
 
             completed = Measurement(
                 download_mbps=download_mbps,
@@ -227,7 +251,7 @@ class InternetSpeedRuRuntime:
                 self._notify()
             raise normalized from err
         else:
-            self.last_good_port = completed.port
+            self._last_good_ports[completed.server] = completed.port
             self.port = completed.port
             self.measurement = completed
             self.status = MeasurementStatus.SUCCESS

@@ -15,6 +15,18 @@ class IperfExecutionError(Exception):
     """Raised when Iperf3 reports that a phase failed."""
 
 
+class IperfPreTransferError(IperfExecutionError):
+    """Raised when Iperf3 fails before it starts transferring test data."""
+
+
+_PRE_TRANSFER_ERRORS = (
+    "unable to connect to server",
+    "server is busy",
+    "control connection",
+    "control socket",
+)
+
+
 def run_iperf_phase(server: str, port: int, reverse: bool) -> float:
     """Run one fixed-profile TCP Iperf3 phase and return Mbit/s."""
     client = iperf3.Client()
@@ -26,7 +38,11 @@ def run_iperf_phase(server: str, port: int, reverse: bool) -> float:
     client.reverse = reverse
 
     result = client.run()
-    if result is None or result.error:
+    if result is None:
+        raise IperfExecutionError
+    if result.error:
+        if any(marker in result.error.lower() for marker in _PRE_TRANSFER_ERRORS):
+            raise IperfPreTransferError
         raise IperfExecutionError
 
     value = result.received_Mbps if reverse else result.sent_Mbps

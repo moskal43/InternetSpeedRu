@@ -10,6 +10,7 @@ from custom_components.internet_speed_ru.const import (
     CONF_PROVIDER,
     CONF_SERVER,
 )
+from tests.helpers import async_configure_kirov_entry
 
 DOMAIN = "internet_speed_ru"
 
@@ -64,22 +65,7 @@ async def test_user_can_configure_integration_once(hass) -> None:
 
 async def test_options_flow_changes_manual_server_through_same_cascade(hass) -> None:
     """Options expose city, provider, and server without free-form endpoints."""
-    flow = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_USER},
-    )
-    result = await hass.config_entries.flow.async_configure(flow["flow_id"], {})
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_CITY: "Киров"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_PROVIDER: "ЭР-Телеком"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_SERVER: "st.kirov.ertelecom.ru"}
-    )
-    entry = result["result"]
-    await hass.async_block_till_done()
+    entry = await async_configure_kirov_entry(hass)
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
     assert options["step_id"] == "city"
@@ -104,22 +90,7 @@ async def test_options_flow_changes_manual_server_through_same_cascade(hass) -> 
 
 async def test_server_change_starts_measurement_when_idle(hass) -> None:
     """A new selected server immediately starts one fresh measurement."""
-    flow = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_USER},
-    )
-    result = await hass.config_entries.flow.async_configure(flow["flow_id"], {})
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_CITY: "Киров"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_PROVIDER: "ЭР-Телеком"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_SERVER: "st.kirov.ertelecom.ru"}
-    )
-    entry = result["result"]
-    await hass.async_block_till_done()
+    entry = await async_configure_kirov_entry(hass)
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -152,22 +123,7 @@ async def test_server_change_starts_measurement_when_idle(hass) -> None:
 
 async def test_server_change_during_measurement_does_not_queue_another(hass) -> None:
     """A server change updates future work but never queues behind active work."""
-    flow = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_USER},
-    )
-    result = await hass.config_entries.flow.async_configure(flow["flow_id"], {})
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_CITY: "Киров"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_PROVIDER: "ЭР-Телеком"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_SERVER: "st.kirov.ertelecom.ru"}
-    )
-    entry = result["result"]
-    await hass.async_block_till_done()
+    entry = await async_configure_kirov_entry(hass)
 
     started = asyncio.Event()
     release = asyncio.Event()
