@@ -15,7 +15,7 @@ InternetSpeedRu — пользовательская интеграция Home A
 
 Home Assistant Container, Supervised и Core Python installation допускаются
 только в режиме **best effort**: они не входят в гарантированный support scope
-`v0.1.0`. Home Assistant Core старше 2026.8 не поддерживается.
+`v0.1.0`. Версии Home Assistant Core ниже 2026.8 не поддерживаются.
 
 ## Установка через HACS custom repository
 
