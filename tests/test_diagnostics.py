@@ -8,7 +8,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.internet_speed_ru.catalog import FALLBACK_CATALOG
+from custom_components.internet_speed_ru.catalog import (
+    FALLBACK_CATALOG,
+    CatalogServer,
+    ServerCatalog,
+)
 from custom_components.internet_speed_ru.catalog_runtime import (
     CatalogSelection,
     CatalogSource,
@@ -47,7 +51,10 @@ async def test_diagnostics_are_an_explicit_support_whitelist(hass) -> None:
     entry = await async_configure_kirov_entry(hass)
 
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+    status = hass.states.get("sensor.internetspeedru_last_measurement_status")
 
+    assert status is not None
+    assert status.attributes["mode"] == "manual"
     assert diagnostics == {
         "version": "0.1.0",
         "mode": "manual",
@@ -149,6 +156,41 @@ async def test_raw_network_failure_data_never_enters_support_surfaces(hass) -> N
     )
 
 
+async def test_fallback_replaces_stale_remote_catalog_age(hass) -> None:
+    """Diagnostics keep catalog source and age from the same selection."""
+    now = datetime(2026, 9, 2, 12, tzinfo=UTC)
+    entry = await async_configure_kirov_entry(hass)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+    class RemoteWithoutConfiguredServer:
+        async def async_catalog(self) -> CatalogSelection:
+            return CatalogSelection(
+                ServerCatalog(
+                    (
+                        CatalogServer(
+                            "Москва",
+                            "ExampleNet",
+                            "speed.example.net",
+                            (5201,),
+                        ),
+                    )
+                ),
+                CatalogSource.REMOTE,
+                now - timedelta(hours=3),
+            )
+
+    hass.data[DOMAIN][DATA_CATALOG_PROVIDER] = RemoteWithoutConfiguredServer()
+    hass.data[DOMAIN][DATA_NOW] = lambda: now
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+    assert diagnostics["catalog"] == {
+        "source": "fallback",
+        "age_seconds": None,
+    }
+
+
 async def test_catalog_failure_has_a_stable_diagnostic_code(hass) -> None:
     """A catalog loss during an Auto rerank is distinct from reachability."""
     now = [datetime(2026, 9, 2, tzinfo=UTC)]
@@ -181,7 +223,10 @@ async def test_catalog_failure_has_a_stable_diagnostic_code(hass) -> None:
         )
 
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+    status = hass.states.get("sensor.internetspeedru_last_measurement_status")
     assert diagnostics["mode"] == "auto"
+    assert status is not None
+    assert status.attributes["mode"] == "auto"
     assert diagnostics["catalog"] == {
         "source": "cache",
         "age_seconds": 93600.0,

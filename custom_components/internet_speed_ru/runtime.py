@@ -12,9 +12,10 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from homeassistant.core import callback
 
-from .catalog import FALLBACK_CATALOG, CatalogServer, ServerCatalog, ordered_ports
+from .catalog import FALLBACK_CATALOG, CatalogServer, ordered_ports
 from .catalog_runtime import (
     CatalogProviderProtocol,
+    CatalogSelection,
     CatalogSource,
     CatalogUnavailableError,
 )
@@ -156,9 +157,7 @@ class InternetSpeedRuRuntime:
         catalog_server: CatalogServer | None = None,
         configured_hostname: str | None = None,
         catalog_provider: CatalogProviderProtocol | None = None,
-        catalog: ServerCatalog | None = None,
-        catalog_source: CatalogSource | None = None,
-        catalog_updated_at: datetime | None = None,
+        catalog_selection: CatalogSelection | None = None,
         auto: bool = False,
         state_store: RuntimeStateStore | None = None,
         now: Now = _utcnow,
@@ -175,9 +174,15 @@ class InternetSpeedRuRuntime:
             else configured_hostname or ""
         )
         self.catalog_provider = catalog_provider
-        self._catalog = catalog
-        self.catalog_source = catalog_source
-        self.catalog_updated_at = catalog_updated_at
+        self._catalog = (
+            catalog_selection.catalog if catalog_selection is not None else None
+        )
+        self.catalog_source = (
+            catalog_selection.source if catalog_selection is not None else None
+        )
+        self.catalog_updated_at = (
+            catalog_selection.updated_at if catalog_selection is not None else None
+        )
         self._auto = auto
         self._ranking_required = auto
         self.port = self._selected_server.ports[0] if self._selected_server else 0
