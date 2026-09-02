@@ -82,8 +82,15 @@
     }
   },
   "exceptions": {
-    "busy": {"message": "Замер уже выполняется."},
-    "measurement_failed": {"message": "Не удалось выполнить замер ({reason})."}
+    "measurement_busy": {"message": "Замер уже выполняется."},
+    "measurement_cancelled": {"message": "Замер отменён."},
+    "measurement_catalog": {"message": "Нет доступного валидного каталога серверов."},
+    "measurement_dns": {"message": "Не удалось определить адрес сервера."},
+    "measurement_unreachable": {"message": "Все порты выбранного сервера недоступны."},
+    "measurement_timeout": {"message": "Сервер не ответил вовремя."},
+    "measurement_invalid_result": {"message": "Сервер вернул некорректный результат замера."},
+    "measurement_iperf": {"message": "Тест Iperf3 завершился ошибкой."},
+    "measurement_unexpected": {"message": "Во время замера произошла непредвиденная ошибка."}
   },
   "selector": {
     "schedule_interval": {

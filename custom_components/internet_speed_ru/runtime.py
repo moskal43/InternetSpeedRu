@@ -12,8 +12,12 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from homeassistant.core import callback
 
-from .catalog import FALLBACK_CATALOG, CatalogServer, ServerCatalog, ordered_ports
-from .catalog_runtime import CatalogProviderProtocol, CatalogUnavailableError
+from .catalog import FALLBACK_CATALOG, CatalogServer, ordered_ports
+from .catalog_runtime import (
+    CatalogProviderProtocol,
+    CatalogSelection,
+    CatalogUnavailableError,
+)
 from .const import (
     AUTO_RANK_INTERVAL,
     AUTO_SWITCH_MIN_IMPROVEMENT_MS,
@@ -63,10 +67,11 @@ class MeasurementStatus(StrEnum):
 
 
 class MeasurementErrorCode(StrEnum):
-    """Stable failure reasons exposed by the first measurement slice."""
+    """Stable machine-readable failure reasons exposed to support surfaces."""
 
     BUSY = "busy"
     CANCELLED = "cancelled"
+    CATALOG = "catalog"
     DNS = "dns"
     UNREACHABLE = "unreachable"
     TIMEOUT = "timeout"
@@ -151,7 +156,7 @@ class InternetSpeedRuRuntime:
         catalog_server: CatalogServer | None = None,
         configured_hostname: str | None = None,
         catalog_provider: CatalogProviderProtocol | None = None,
-        catalog: ServerCatalog | None = None,
+        catalog_selection: CatalogSelection | None = None,
         auto: bool = False,
         state_store: RuntimeStateStore | None = None,
         now: Now = _utcnow,
@@ -168,7 +173,15 @@ class InternetSpeedRuRuntime:
             else configured_hostname or ""
         )
         self.catalog_provider = catalog_provider
-        self._catalog = catalog
+        self._catalog = (
+            catalog_selection.catalog if catalog_selection is not None else None
+        )
+        self.catalog_source = (
+            catalog_selection.source if catalog_selection is not None else None
+        )
+        self.catalog_updated_at = (
+            catalog_selection.updated_at if catalog_selection is not None else None
+        )
         self._auto = auto
         self._ranking_required = auto
         self.port = self._selected_server.ports[0] if self._selected_server else 0
@@ -205,6 +218,10 @@ class InternetSpeedRuRuntime:
         self.last_success = state.last_success
         self.status = state.status
         self.error = state.error
+        interrupted = self.status is MeasurementStatus.RUNNING
+        if interrupted:
+            self.status = MeasurementStatus.ERROR
+            self.error = MeasurementErrorCode.CANCELLED
         self.last_ranking = state.last_ranking
         self._ranked_servers = state.ranked_servers
         if state.measurement is not None:
@@ -220,6 +237,8 @@ class InternetSpeedRuRuntime:
                         self._ranking_required = False
             if state.measurement.server == self.server:
                 self.port = state.measurement.port
+        if interrupted:
+            await self._async_persist()
 
     async def _async_persist(self) -> None:
         if self._state_store is None:
@@ -313,7 +332,7 @@ class InternetSpeedRuRuntime:
             self.select_server(FALLBACK_CATALOG.get(hostname))
             return
         selection = await self.catalog_provider.async_catalog()
-        self._catalog = selection.catalog
+        self._apply_catalog_selection(selection)
         self.select_server(selection.catalog.get(hostname))
 
     async def async_refresh_catalog(self) -> None:
@@ -322,7 +341,7 @@ class InternetSpeedRuRuntime:
             return
         try:
             selection = await self.catalog_provider.async_catalog()
-            self._catalog = selection.catalog
+            self._apply_catalog_selection(selection)
             server = selection.catalog.get(self.server)
         except CatalogUnavailableError, KeyError:
             return
@@ -331,7 +350,7 @@ class InternetSpeedRuRuntime:
     async def _async_rank_server(self, generation: int) -> None:
         if self.catalog_provider is not None:
             selection = await self.catalog_provider.async_catalog()
-            self._catalog = selection.catalog
+            self._apply_catalog_selection(selection)
         if self._catalog is None:
             raise AutoSelectionUnavailableError
         ranked = await AutoServerSelector(self.probe).async_rank(
@@ -358,6 +377,20 @@ class InternetSpeedRuRuntime:
         self.port = selected.port
         self._ranking_required = False
         self.last_ranking = self._now()
+
+    @callback
+    def _apply_catalog_selection(self, selection: CatalogSelection) -> None:
+        """Atomically retain a validated catalog and its support-safe metadata."""
+        self._catalog = selection.catalog
+        self.catalog_source = selection.source
+        self.catalog_updated_at = selection.updated_at
+
+    @property
+    def catalog_age_seconds(self) -> float | None:
+        """Return the non-negative age of a dated catalog snapshot."""
+        if self.catalog_updated_at is None:
+            return None
+        return max(0.0, (self._now() - self.catalog_updated_at).total_seconds())
 
     @callback
     def async_add_listener(self, listener: RuntimeListener) -> Callable[[], None]:
@@ -533,6 +566,8 @@ class InternetSpeedRuRuntime:
 
     @staticmethod
     def _normalize_error(err: Exception) -> MeasurementErrorCode:
+        if isinstance(err, CatalogUnavailableError):
+            return MeasurementErrorCode.CATALOG
         if isinstance(err, InvalidIperfResultError):
             return MeasurementErrorCode.INVALID_RESULT
         if isinstance(err, IperfExecutionError):

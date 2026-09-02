@@ -36,11 +36,10 @@ class InternetSpeedRuRunButton(InternetSpeedRuEntity, ButtonEntity):
         except MeasurementBusyError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
-                translation_key="busy",
+                translation_key="measurement_busy",
             ) from err
         except MeasurementError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
-                translation_key="measurement_failed",
-                translation_placeholders={"reason": err.code.value},
+                translation_key=f"measurement_{err.code.value}",
             ) from err

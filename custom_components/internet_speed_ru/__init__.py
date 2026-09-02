@@ -7,7 +7,12 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import async_track_time_interval
 
 from .catalog import FALLBACK_CATALOG
-from .catalog_runtime import CatalogUnavailableError, catalog_provider
+from .catalog_runtime import (
+    CatalogSelection,
+    CatalogSource,
+    CatalogUnavailableError,
+    catalog_provider,
+)
 from .const import (
     CATALOG_REFRESH_INTERVAL,
     CONF_SERVER,
@@ -81,10 +86,10 @@ async def async_setup_entry(
     )
     state_store = state_store_factory(hass, entry.entry_id)
     selected_server = None
-    active_catalog = None
+    active_catalog_selection = None
     try:
         selection = await provider.async_catalog()
-        active_catalog = selection.catalog
+        active_catalog_selection = selection
         if not auto:
             selected_server = selection.catalog.get(hostname)
     except (CatalogUnavailableError, KeyError) as err:
@@ -94,6 +99,11 @@ async def async_setup_entry(
             ) from err
         try:
             selected_server = FALLBACK_CATALOG.get(hostname)
+            active_catalog_selection = CatalogSelection(
+                FALLBACK_CATALOG,
+                CatalogSource.FALLBACK,
+                None,
+            )
         except KeyError as err:
             persisted = await state_store.async_load()
             measurement = persisted.measurement if persisted is not None else None
@@ -119,7 +129,7 @@ async def async_setup_entry(
         catalog_server=selected_server,
         configured_hostname=hostname,
         catalog_provider=provider,
-        catalog=active_catalog,
+        catalog_selection=active_catalog_selection,
         auto=auto,
         state_store=state_store,
         **runtime_args,

@@ -105,6 +105,7 @@ class InternetSpeedRuStatusSensor(InternetSpeedRuEntity, SensorEntity):
         """Return stable public context for the latest attempt."""
         measurement = self.runtime.measurement
         return {
+            "mode": "auto" if self.runtime.auto else "manual",
             "server": measurement.server if measurement else self.runtime.server,
             "city": measurement.server_city
             if measurement

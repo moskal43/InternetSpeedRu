@@ -49,3 +49,37 @@ async def test_config_flow_warning_is_available_in_english_and_russian(hass) -> 
         "Нет доступного валидного каталога серверов. "
         "Проверьте подключение и повторите попытку."
     )
+
+
+async def test_measurement_failures_have_independent_localized_messages(hass) -> None:
+    """Machine codes map to RU/EN keys without raw adapter placeholders."""
+    english = await translation.async_get_translations(
+        hass,
+        "en",
+        "exceptions",
+        integrations={DOMAIN},
+    )
+    russian = await translation.async_get_translations(
+        hass,
+        "ru",
+        "exceptions",
+        integrations={DOMAIN},
+    )
+    codes = (
+        "busy",
+        "cancelled",
+        "catalog",
+        "dns",
+        "unreachable",
+        "timeout",
+        "invalid_result",
+        "iperf",
+        "unexpected",
+    )
+
+    for code in codes:
+        key = f"component.{DOMAIN}.exceptions.measurement_{code}.message"
+        assert english[key]
+        assert russian[key]
+        assert "{" not in english[key]
+        assert "{" not in russian[key]

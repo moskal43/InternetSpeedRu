@@ -88,12 +88,15 @@
     }
   },
   "exceptions": {
-    "busy": {
-      "message": "A measurement is already running."
-    },
-    "measurement_failed": {
-      "message": "The measurement failed ({reason})."
-    }
+    "measurement_busy": {"message": "A measurement is already running."},
+    "measurement_cancelled": {"message": "The measurement was cancelled."},
+    "measurement_catalog": {"message": "No valid server catalog is available."},
+    "measurement_dns": {"message": "The server name could not be resolved."},
+    "measurement_unreachable": {"message": "All ports on the selected server are unreachable."},
+    "measurement_timeout": {"message": "The server did not respond in time."},
+    "measurement_invalid_result": {"message": "The server returned an invalid measurement result."},
+    "measurement_iperf": {"message": "The Iperf3 test failed."},
+    "measurement_unexpected": {"message": "The measurement failed unexpectedly."}
   },
   "selector": {
     "schedule_interval": {
