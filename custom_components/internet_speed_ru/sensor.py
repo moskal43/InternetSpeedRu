@@ -1,6 +1,6 @@
 """Measurement sensors for InternetSpeedRu."""
 
-from typing import ClassVar, Final
+from typing import Final
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -90,10 +90,10 @@ class InternetSpeedRuStatusSensor(InternetSpeedRuEntity, SensorEntity):
 
     _attr_translation_key = "status"
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options: ClassVar[list[str]] = [status.value for status in MeasurementStatus]
 
     def __init__(self, entry: InternetSpeedRuConfigEntry) -> None:
         super().__init__(entry, entry.runtime_data, "status")
+        self._attr_options = [status.value for status in MeasurementStatus]
 
     @property
     def native_value(self) -> str | None:

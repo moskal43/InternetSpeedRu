@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from statistics import median
 from time import monotonic
-from typing import Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from homeassistant.core import callback
 
@@ -25,10 +25,18 @@ from .iperf import (
     run_iperf_phase,
 )
 
+if TYPE_CHECKING:
+    from .scheduling import ClockScheduler, MeasurementSchedule
+
 _ResultT = TypeVar("_ResultT")
 type RuntimeListener = Callable[[], None]
 type LatencyProbe = Callable[[str, int], Awaitable[float]]
 type IperfRunner = Callable[[str, int, bool], float]
+type Now = Callable[[], datetime]
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 class RunBlocking(Protocol):
@@ -138,6 +146,7 @@ class InternetSpeedRuRuntime:
         configured_hostname: str | None = None,
         catalog_provider: CatalogProviderProtocol | None = None,
         state_store: RuntimeStateStore | None = None,
+        now: Now = _utcnow,
     ) -> None:
         self.run_blocking = run_blocking
         self.probe = probe
@@ -154,6 +163,9 @@ class InternetSpeedRuRuntime:
         self.port = self._selected_server.ports[0] if self._selected_server else 0
         self._last_good_ports: dict[str, int] = {}
         self._state_store = state_store
+        self._persist_lock = asyncio.Lock()
+        self._now = now
+        self._schedule: MeasurementSchedule | None = None
 
         self.measurement: Measurement | None = None
         self.schedule_baseline: datetime | None = None
@@ -188,16 +200,39 @@ class InternetSpeedRuRuntime:
     async def _async_persist(self) -> None:
         if self._state_store is None:
             return
-        await self._state_store.async_save(
-            PersistedRuntimeState(
-                measurement=self.measurement,
-                schedule_baseline=self.schedule_baseline,
-                last_attempt=self.last_attempt,
-                last_success=self.last_success,
-                status=self.status,
-                error=self.error,
+        async with self._persist_lock:
+            await self._state_store.async_save(
+                PersistedRuntimeState(
+                    measurement=self.measurement,
+                    schedule_baseline=self.schedule_baseline,
+                    last_attempt=self.last_attempt,
+                    last_success=self.last_success,
+                    status=self.status,
+                    error=self.error,
+                )
             )
-        )
+
+    async def async_set_schedule_baseline(self, baseline: datetime) -> None:
+        """Persist the anchor for the next ordinary automatic attempt."""
+        self.schedule_baseline = baseline
+        await self._async_persist()
+
+    def start_schedule(self, clock: ClockScheduler, interval: str) -> None:
+        """Start automatic scheduling after the config entry is loaded."""
+        from .scheduling import MeasurementSchedule
+
+        self._schedule = MeasurementSchedule(self, clock, interval)
+        self._schedule.start()
+
+    def update_interval(self, interval: str) -> None:
+        """Recalculate the automatic schedule for a changed preset."""
+        if self._schedule is not None:
+            self._schedule.update_interval(interval)
+
+    @property
+    def interval(self) -> str | None:
+        """Return the active schedule preset."""
+        return self._schedule.interval if self._schedule is not None else None
 
     @property
     def running(self) -> bool:
@@ -268,7 +303,11 @@ class InternetSpeedRuRuntime:
         if self._unloaded or generation != self._generation:
             raise MeasurementError(MeasurementErrorCode.CANCELLED)
 
-    async def async_measure(self) -> Measurement:
+    async def async_measure(
+        self,
+        *,
+        schedule_baseline: datetime | None = None,
+    ) -> Measurement:
         """Run and atomically publish one complete connection measurement."""
         if self._unloaded:
             raise MeasurementError(MeasurementErrorCode.CANCELLED)
@@ -277,7 +316,9 @@ class InternetSpeedRuRuntime:
 
         if self._selected_server is None:
             unavailable = MeasurementError(MeasurementErrorCode.UNREACHABLE)
-            self.last_attempt = datetime.now(UTC)
+            if schedule_baseline is not None:
+                self.schedule_baseline = schedule_baseline
+            self.last_attempt = self._now()
             self.status = MeasurementStatus.ERROR
             self.error = unavailable.code
             self._notify()
@@ -285,11 +326,13 @@ class InternetSpeedRuRuntime:
             raise unavailable
 
         self._running = True
+        if schedule_baseline is not None:
+            self.schedule_baseline = schedule_baseline
         generation = self._generation
         selected_server = self._selected_server
         self.status = MeasurementStatus.RUNNING
         self.error = None
-        self.last_attempt = datetime.now(UTC)
+        self.last_attempt = self._now()
         self._notify()
         await self._async_persist()
 
@@ -357,7 +400,7 @@ class InternetSpeedRuRuntime:
                 server_city=selected_server.city,
                 server_provider=selected_server.provider,
                 port=selected_port,
-                measured_at=datetime.now(UTC),
+                measured_at=self._now(),
             )
         except MeasurementError:
             raise
@@ -379,6 +422,8 @@ class InternetSpeedRuRuntime:
             self.schedule_baseline = completed.measured_at
             self._notify()
             await self._async_persist()
+            if self._schedule is not None:
+                self._schedule.recalculate()
             return completed
         finally:
             if generation == self._generation:
@@ -402,6 +447,8 @@ class InternetSpeedRuRuntime:
     def async_cancel(self) -> None:
         """Logically cancel active work and reject every late adapter result."""
         self._unloaded = True
+        if self._schedule is not None:
+            self._schedule.cancel()
         self._generation += 1
         self._running = False
         self._listeners.clear()

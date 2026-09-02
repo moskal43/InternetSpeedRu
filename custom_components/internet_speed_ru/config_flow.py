@@ -5,6 +5,7 @@ from typing import Any, ClassVar, cast
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.helpers import selector
 
 from .catalog import ServerCatalog
 from .catalog_runtime import (
@@ -14,11 +15,17 @@ from .catalog_runtime import (
 )
 from .const import (
     CONF_CITY,
+    CONF_INTERVAL,
     CONF_PROVIDER,
     CONF_SERVER,
+    DEFAULT_INTERVAL,
     DOMAIN,
     NAME,
+    SCHEDULE_INTERVALS,
+    effective_interval,
 )
+
+type _Flow = config_entries.ConfigFlow | config_entries.OptionsFlow
 
 
 class _ManualServerCascade:
@@ -34,7 +41,7 @@ class _ManualServerCascade:
 
     async def _async_load_catalog(self) -> bool:
         try:
-            selection = await catalog_provider(cast(Any, self).hass).async_catalog()
+            selection = await catalog_provider(cast(_Flow, self).hass).async_catalog()
         except CatalogUnavailableError:
             return False
         self._catalog = selection.catalog
@@ -46,7 +53,7 @@ class _ManualServerCascade:
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         """Select the server city."""
-        flow = cast(Any, self)
+        flow = cast(_Flow, self)
         if self._catalog is None and not await self._async_load_catalog():
             return flow.async_show_form(
                 step_id="user",
@@ -76,7 +83,7 @@ class _ManualServerCascade:
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         """Select a provider available in the chosen city."""
-        flow = cast(Any, self)
+        flow = cast(_Flow, self)
         assert self._catalog is not None
         assert self._city is not None
         if user_input is not None:
@@ -98,7 +105,7 @@ class _ManualServerCascade:
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         """Select a catalog server without accepting arbitrary endpoints."""
-        flow = cast(Any, self)
+        flow = cast(_Flow, self)
         assert self._catalog is not None
         assert self._city is not None
         assert self._provider is not None
@@ -106,7 +113,10 @@ class _ManualServerCascade:
         if user_input is not None:
             return flow.async_create_entry(
                 title=self._entry_title,
-                data={CONF_SERVER: user_input[CONF_SERVER]},
+                data={
+                    CONF_SERVER: user_input[CONF_SERVER],
+                    CONF_INTERVAL: DEFAULT_INTERVAL,
+                },
             )
         return flow.async_show_form(
             step_id="server",
@@ -160,5 +170,45 @@ class InternetSpeedRuOptionsFlow(_ManualServerCascade, config_entries.OptionsFlo
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Start the same city/provider/server cascade used at setup."""
-        return await self.async_step_city(user_input)
+        """Choose which independent option to change."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=("schedule", "city"),
+        )
+
+    async def async_step_schedule(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Change the automatic measurement interval."""
+        current = effective_interval(self.config_entry)
+        if user_input is not None:
+            options = dict(self.config_entry.options)
+            options[CONF_INTERVAL] = user_input[CONF_INTERVAL]
+            return self.async_create_entry(title="", data=options)
+        return self.async_show_form(
+            step_id="schedule",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_INTERVAL, default=current
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=list(SCHEDULE_INTERVALS),
+                            translation_key="schedule_interval",
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_server(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Change server while retaining independently configured options."""
+        if user_input is None:
+            return await super().async_step_server()
+        options = dict(self.config_entry.options)
+        options[CONF_SERVER] = user_input[CONF_SERVER]
+        return self.async_create_entry(title="", data=options)
