@@ -2,11 +2,16 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from custom_components.internet_speed_ru.const import (
     IPERF3_DURATION,
     IPERF3_STREAMS,
 )
-from custom_components.internet_speed_ru.iperf import run_iperf_phase
+from custom_components.internet_speed_ru.iperf import (
+    IperfPreTransferError,
+    run_iperf_phase,
+)
 
 
 def test_iperf_adapter_uses_the_fixed_tcp_profile(monkeypatch) -> None:
@@ -38,3 +43,21 @@ def test_iperf_adapter_uses_the_fixed_tcp_profile(monkeypatch) -> None:
         "num_streams": IPERF3_STREAMS,
         "reverse": True,
     }
+
+
+def test_iperf_adapter_marks_connection_failure_as_pre_transfer(monkeypatch) -> None:
+    """The runtime can retry an Iperf control connection that never transferred."""
+
+    class FakeClient:
+        def run(self):
+            return SimpleNamespace(
+                error="unable to connect to server: Connection refused"
+            )
+
+    monkeypatch.setattr(
+        "custom_components.internet_speed_ru.iperf.iperf3.Client",
+        FakeClient,
+    )
+
+    with pytest.raises(IperfPreTransferError):
+        run_iperf_phase("server.example", 5201, True)
