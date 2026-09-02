@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/moskal43/InternetSpeedRu/issues",
   "requirements": ["iperf3==0.1.11"],
   "single_config_entry": true,
-  "version": "0.1.1"
+  "version": "0.1.2"
 }
