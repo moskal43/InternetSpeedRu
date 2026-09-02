@@ -1,5 +1,7 @@
 """Persistent runtime-state behavior tests."""
 
+import asyncio
+
 import pytest
 from homeassistant.const import Platform
 from homeassistant.helpers import entity_registry as er
@@ -7,7 +9,13 @@ from homeassistant.helpers.storage import Store
 
 from custom_components.internet_speed_ru import InternetSpeedRuConfigEntry
 from custom_components.internet_speed_ru.const import DOMAIN
-from custom_components.internet_speed_ru.runtime import MeasurementError
+from custom_components.internet_speed_ru.diagnostics import (
+    async_get_config_entry_diagnostics,
+)
+from custom_components.internet_speed_ru.runtime import (
+    MeasurementError,
+    MeasurementErrorCode,
+)
 from custom_components.internet_speed_ru.storage import (
     STORAGE_VERSION,
     runtime_storage_key,
@@ -89,6 +97,39 @@ async def test_failed_attempt_keeps_snapshot_across_reload(hass) -> None:
         "status": "error",
     }
     assert states["status"].attributes["error"] == "unreachable"
+
+
+async def test_interrupted_running_state_restores_as_cancelled_error(hass) -> None:
+    """A restart never leaves an interrupted attempt looking permanently active."""
+    entry = await async_configure_kirov_entry(hass)
+    runtime = entry.runtime_data
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def run_blocking(target, *args):
+        started.set()
+        await release.wait()
+        return target(*args)
+
+    runtime.run_blocking = run_blocking
+    active = asyncio.create_task(runtime.async_measure())
+    await started.wait()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    release.set()
+    with pytest.raises(MeasurementError) as error:
+        await active
+    assert error.value.code is MeasurementErrorCode.CANCELLED
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    status = hass.states.get(_sensor_entity_id(hass, entry, "status"))
+    assert status is not None
+    assert status.state == "error"
+    assert status.attributes["error"] == "cancelled"
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+    assert diagnostics["status"] == "error"
+    assert diagnostics["error"] == "cancelled"
 
 
 async def test_entity_identity_stays_stable_when_server_changes(hass) -> None:
