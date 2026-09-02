@@ -135,17 +135,23 @@ class InternetSpeedRuRuntime:
         probe: LatencyProbe = async_tcp_latency_probe,
         runner: IperfRunner = run_iperf_phase,
         catalog_server: CatalogServer | None = None,
+        configured_hostname: str | None = None,
         catalog_provider: CatalogProviderProtocol | None = None,
         state_store: RuntimeStateStore | None = None,
     ) -> None:
         self.run_blocking = run_blocking
         self.probe = probe
         self.runner = runner
-        self._selected_server = catalog_server or FALLBACK_CATALOG.get(
-            "st.kirov.ertelecom.ru"
+        if catalog_server is None and configured_hostname is None:
+            catalog_server = FALLBACK_CATALOG.get("st.kirov.ertelecom.ru")
+        self._selected_server = catalog_server
+        self._configured_hostname = (
+            catalog_server.hostname
+            if catalog_server is not None
+            else configured_hostname or ""
         )
         self.catalog_provider = catalog_provider
-        self.port = self._selected_server.ports[0]
+        self.port = self._selected_server.ports[0] if self._selected_server else 0
         self._last_good_ports: dict[str, int] = {}
         self._state_store = state_store
 
@@ -201,22 +207,31 @@ class InternetSpeedRuRuntime:
     @property
     def server(self) -> str:
         """Return the currently selected manual server hostname."""
-        return self._selected_server.hostname
+        return self._configured_hostname
 
     @property
     def server_city(self) -> str:
         """Return the city of the currently selected server."""
-        return self._selected_server.city
+        if self._selected_server is not None:
+            return self._selected_server.city
+        if self.measurement is not None and self.measurement.server == self.server:
+            return self.measurement.server_city
+        return ""
 
     @property
     def server_provider(self) -> str:
         """Return the provider of the currently selected server."""
-        return self._selected_server.provider
+        if self._selected_server is not None:
+            return self._selected_server.provider
+        if self.measurement is not None and self.measurement.server == self.server:
+            return self.measurement.server_provider
+        return ""
 
     @callback
     def select_server(self, server: CatalogServer) -> None:
         """Change the server used by future measurements without queueing work."""
         self._selected_server = server
+        self._configured_hostname = server.hostname
         self.port = self._last_good_ports.get(server.hostname, server.ports[0])
 
     async def async_select_server(self, hostname: str) -> None:
@@ -259,6 +274,9 @@ class InternetSpeedRuRuntime:
             raise MeasurementError(MeasurementErrorCode.CANCELLED)
         if self._running:
             raise MeasurementBusyError
+
+        if self._selected_server is None:
+            raise MeasurementError(MeasurementErrorCode.UNREACHABLE)
 
         self._running = True
         generation = self._generation
