@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+import yaml
+
 _HOSTNAME_PATTERN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?",
@@ -25,6 +27,63 @@ class CatalogServer:
     provider: str
     hostname: str
     ports: tuple[int, ...]
+
+
+def _upstream_ports(value: object) -> tuple[int, ...]:
+    """Parse the upstream single-port or inclusive range representation."""
+    if isinstance(value, bool):
+        raise InvalidCatalogError("upstream port is invalid")
+    if isinstance(value, int):
+        return (value,)
+    if not isinstance(value, str):
+        raise InvalidCatalogError("upstream port is invalid")
+    parts = value.split("-")
+    try:
+        if len(parts) == 1:
+            return (int(parts[0]),)
+        if len(parts) == 2:
+            start, end = (int(part) for part in parts)
+            if start > end:
+                raise InvalidCatalogError("upstream port range is invalid")
+            return tuple(range(start, end + 1))
+    except ValueError as err:
+        raise InvalidCatalogError("upstream port is invalid") from err
+    raise InvalidCatalogError("upstream port is invalid")
+
+
+def parse_upstream_catalog(payload: str) -> ServerCatalog:
+    """Fully validate the upstream list.yml payload as one catalog."""
+    try:
+        raw_entries = yaml.safe_load(payload)
+    except yaml.YAMLError as err:
+        raise InvalidCatalogError("upstream YAML is invalid") from err
+    if not isinstance(raw_entries, list):
+        raise InvalidCatalogError("upstream catalog must be a list")
+
+    entries: list[CatalogServer] = []
+    for raw in raw_entries:
+        if not isinstance(raw, Mapping):
+            raise InvalidCatalogError("upstream entry has an invalid shape")
+        try:
+            name = raw["Name"]
+            city = raw["City"]
+            hostname = raw["address"]
+            port = raw["port"]
+        except KeyError as err:
+            raise InvalidCatalogError("upstream entry is missing a field") from err
+        if not isinstance(name, str) or not isinstance(city, str):
+            raise InvalidCatalogError("upstream name and city must be strings")
+        suffix = f" {city}"
+        provider = name[: -len(suffix)] if name.endswith(suffix) else name
+        entries.append(
+            CatalogServer(
+                city=city,
+                provider=provider,
+                hostname=hostname,
+                ports=_upstream_ports(port),
+            )
+        )
+    return ServerCatalog(entries)
 
 
 def _validated_server(raw: Mapping[str, Any] | CatalogServer) -> CatalogServer:

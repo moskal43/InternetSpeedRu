@@ -281,3 +281,40 @@ async def test_manual_measurement_exhausts_only_the_selected_server(hass) -> Non
         await _press_run_measurement(hass, entry)
 
     assert attempts == [("st.kirov.ertelecom.ru", port) for port in range(5201, 5210)]
+
+
+async def test_catalog_refresh_error_keeps_existing_entities_and_status(hass) -> None:
+    """A background catalog failure never turns a successful measurement stale."""
+    entry = await _configured_entry(hass)
+    runtime = entry.runtime_data
+
+    async def probe(server: str, port: int) -> float:
+        return 12.0
+
+    runtime.probe = probe
+    runtime.runner = lambda server, port, reverse: 75.0 if reverse else 25.0
+    await runtime.async_measure()
+
+    class UnavailableCatalog:
+        async def async_catalog(self):
+            from custom_components.internet_speed_ru.catalog_runtime import (
+                CatalogUnavailableError,
+            )
+
+            raise CatalogUnavailableError
+
+    runtime.catalog_provider = UnavailableCatalog()
+    before = {
+        state.entity_id: (state.state, dict(state.attributes))
+        for state in hass.states.async_all()
+        if state.entity_id.startswith("sensor.internet_speed_ru")
+    }
+
+    await runtime.async_refresh_catalog()
+
+    after = {
+        state.entity_id: (state.state, dict(state.attributes))
+        for state in hass.states.async_all()
+        if state.entity_id.startswith("sensor.internet_speed_ru")
+    }
+    assert after == before

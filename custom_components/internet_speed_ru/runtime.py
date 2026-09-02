@@ -13,6 +13,7 @@ from typing import Any, Protocol, TypeVar
 from homeassistant.core import callback
 
 from .catalog import FALLBACK_CATALOG, CatalogServer, ordered_ports
+from .catalog_runtime import CatalogProviderProtocol, CatalogUnavailableError
 from .const import (
     TCP_PROBE_COUNT,
     TCP_PROBE_TIMEOUT,
@@ -134,6 +135,7 @@ class InternetSpeedRuRuntime:
         probe: LatencyProbe = async_tcp_latency_probe,
         runner: IperfRunner = run_iperf_phase,
         catalog_server: CatalogServer | None = None,
+        catalog_provider: CatalogProviderProtocol | None = None,
         state_store: RuntimeStateStore | None = None,
     ) -> None:
         self.run_blocking = run_blocking
@@ -142,6 +144,7 @@ class InternetSpeedRuRuntime:
         self._selected_server = catalog_server or FALLBACK_CATALOG.get(
             "st.kirov.ertelecom.ru"
         )
+        self.catalog_provider = catalog_provider
         self.port = self._selected_server.ports[0]
         self._last_good_ports: dict[str, int] = {}
         self._state_store = state_store
@@ -215,6 +218,25 @@ class InternetSpeedRuRuntime:
         """Change the server used by future measurements without queueing work."""
         self._selected_server = server
         self.port = self._last_good_ports.get(server.hostname, server.ports[0])
+
+    async def async_select_server(self, hostname: str) -> None:
+        """Select a hostname from the active validated runtime catalog."""
+        if self.catalog_provider is None:
+            self.select_server(FALLBACK_CATALOG.get(hostname))
+            return
+        selection = await self.catalog_provider.async_catalog()
+        self.select_server(selection.catalog.get(hostname))
+
+    async def async_refresh_catalog(self) -> None:
+        """Refresh catalog metadata without changing observable measurement state."""
+        if self.catalog_provider is None:
+            return
+        try:
+            selection = await self.catalog_provider.async_catalog()
+            server = selection.catalog.get(self.server)
+        except CatalogUnavailableError, KeyError:
+            return
+        self.select_server(server)
 
     @callback
     def async_add_listener(self, listener: RuntimeListener) -> Callable[[], None]:
