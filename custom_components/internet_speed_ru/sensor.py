@@ -103,9 +103,16 @@ class InternetSpeedRuStatusSensor(InternetSpeedRuEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, str | int | None]:
         """Return stable public context for the latest attempt."""
+        measurement = self.runtime.measurement
         return {
-            "server": self.runtime.server,
-            "port": self.runtime.port,
+            "server": measurement.server if measurement else self.runtime.server,
+            "city": measurement.server_city
+            if measurement
+            else self.runtime.server_city,
+            "provider": measurement.server_provider
+            if measurement
+            else self.runtime.server_provider,
+            "port": measurement.port if measurement else self.runtime.port,
             "error": self.runtime.error,
             "last_attempt": self.runtime.last_attempt.isoformat()
             if self.runtime.last_attempt

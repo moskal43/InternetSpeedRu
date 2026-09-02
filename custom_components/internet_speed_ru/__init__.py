@@ -7,6 +7,7 @@ from homeassistant.helpers import device_registry as dr
 from .catalog import FALLBACK_CATALOG
 from .const import CONF_SERVER, DOMAIN, NAME, PLATFORMS
 from .runtime import InternetSpeedRuRuntime, MeasurementError
+from .storage import HomeAssistantRuntimeStateStore
 
 type InternetSpeedRuConfigEntry = ConfigEntry[InternetSpeedRuRuntime]
 
@@ -48,7 +49,9 @@ async def async_setup_entry(
         catalog_server=FALLBACK_CATALOG.get(
             entry.options.get(CONF_SERVER, entry.data[CONF_SERVER])
         ),
+        state_store=HomeAssistantRuntimeStateStore(hass, entry.entry_id),
     )
+    await entry.runtime_data.async_restore()
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     dr.async_get(hass).async_get_or_create(
